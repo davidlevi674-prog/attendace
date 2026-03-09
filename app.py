@@ -8,7 +8,7 @@ import time
 import os
 
 # 1. הגדרות דף ועיצוב
-st.set_page_config(page_title="בדיקת נוכחות גרביל", layout="centered", page_icon="🇮🇱")
+st.set_page_config(page_title="בדיקת נוכחות גרביל", layout="centered", page_icon="logo.png")
 
 st.markdown("""
     <style>
@@ -198,4 +198,5 @@ if not missing and total_active > 0:
     st.link_button("📲 שלח עדכון בוואטסאפ", f"https://wa.me/?text={msg}")
 elif total_active > 0:
     st.warning(f"⚠️ חסרים עוד {len(missing)} אנשים.")
+
 
