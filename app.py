@@ -5,9 +5,10 @@ import urllib.parse
 from streamlit_gsheets import GSheetsConnection
 import requests
 import time
+import os
 
 # 1. הגדרות דף ועיצוב
-st.set_page_config(page_title="נוכחות חטיבה 226", layout="centered", page_icon="🇮🇱")
+st.set_page_config(page_title="בדיקת נוכחות גרביל", layout="centered", page_icon="🇮🇱")
 
 st.markdown("""
     <style>
@@ -21,19 +22,24 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# לוגו
+# הצגת הלוגו מקובץ מקומי (logo.png) שנמצא ב-GitHub
 col1, col2, col3 = st.columns([1,1,1])
 with col2:
-    st.image("https://upload.wikimedia.org/wikipedia/he/3/30/226_Tag.png", width=150)
+    if os.path.exists("logo.png"):
+        st.image("logo.png", width=150)
+    else:
+        # גיבוי בטקסט אם הקובץ לא נמצא
+        st.markdown("<h2 style='text-align: center;'>🇮🇱</h2>", unsafe_allow_html=True)
 
-st.title("🇮🇱 ניהול נוכחות - חטיבה 226")
+st.title("🇮🇱 בדיקת נוכחות גרביל")
 
 # 2. חיבור ל-Google Sheets
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_data():
     try:
-        df = conn.read(worksheet="Sheet1", ttl=0)
+        # ttl=10 למניעת שגיאת Quota 429 (בקשה חדשה כל 10 שניות לכל היותר)
+        df = conn.read(worksheet="Sheet1", ttl=10)
         df.columns = df.columns.str.strip()
         
         def clean_frame(val):
@@ -46,7 +52,6 @@ def load_data():
         if 'מסגרת' in df.columns:
             df['מסגרת'] = df['מסגרת'].apply(clean_frame)
             
-        # ניקוי מספר אישי (חשוב מאוד להתראות!)
         if 'מספר אישי' in df.columns:
              df['מספר אישי'] = df['מספר אישי'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
 
@@ -68,11 +73,9 @@ def save_data(df_to_save):
     except Exception as e:
         st.error(f"שגיאה בשמירה: {e}")
 
-# --- פונקציה חכמה לשליחת התראות אישיות ---
+# פונקציית התראות ntfy (שליחה רק לפעילים לפי מספר אישי)
 def send_targeted_notifications(active_df):
-    # הקישור לאפליקציה שלך (חשוב: תחליף בקישור האמיתי כשתעלה לענן)
-    app_link = "https://attendance-226.streamlit.app"
-    
+    app_link = "https://attendance-226.streamlit.app" # וודא שזה הלינק הנכון
     count = 0
     progress_text = "שולח התראות לחיילים פעילים..."
     my_bar = st.progress(0, text=progress_text)
@@ -80,31 +83,25 @@ def send_targeted_notifications(active_df):
     
     for index, row in active_df.iterrows():
         mi = str(row['מספר אישי']).strip()
-        
-        # בניית הערוץ האישי: h226_ + מספר אישי
         topic = f"h226_{mi}"
-        
         try:
             requests.post(f"https://ntfy.sh/{topic}", 
-                data="בוקר טוב! נפתח דיווח נוכחות. לחץ כאן למילוי.",
+                data="בוקר טוב! נפתח דיווח נוכחות גרביל. לחץ כאן למילוי.",
                 headers={
-                    "Title": "🇮🇱 חטיבה 226 - נוכחות",
+                    "Title": "🇮🇱 בדיקת נוכחות גרביל",
                     "Click": app_link,
                     "Priority": "high",
                     "Tags": "warning,flag-il"
                 }
             )
             count += 1
-            # עדכון בר ההתקדמות
             my_bar.progress(count / total, text=f"נשלח ל-{row['שם מלא']} ({count}/{total})")
-            time.sleep(0.05) # השהייה קטנה כדי לא להעמיס
+            time.sleep(0.05)
         except:
             pass
-            
-    my_bar.empty() # העלמת הבר בסיום
+    my_bar.empty()
     return count
 
-# טעינת נתונים
 df = load_data()
 
 # --- סרגל צד ---
@@ -131,21 +128,17 @@ with st.sidebar:
     
     st.subheader("ניהול יומי")
     if st.button("🔄 התחל מחזור + שלח התראות"):
-        # 1. איפוס הנתונים
         df['נוכח'] = False
         df['זמן דיווח'] = ""
-        conn.update(worksheet="Sheet1", data=df) # שמירה ללא rerun עדיין
+        conn.update(worksheet="Sheet1", data=df)
         
-        # 2. שליחת התראות רק לפעילים
         active_soldiers = df[df['פעיל'] == True]
-        
         if not active_soldiers.empty:
             sent_count = send_targeted_notifications(active_soldiers)
-            st.success(f"המחזור אופס! נשלחו התראות ל-{sent_count} חיילים פעילים.")
-        else:
-            st.warning("המחזור אופס, אך לא נמצאו חיילים פעילים לשליחת התראה.")
-            
-        time.sleep(2) # לתת זמן לקרוא את ההודעה
+            st.success(f"המחזור אופס ונשלחו התראות ל-{sent_count} חיילים.")
+        
+        st.cache_data.clear()
+        time.sleep(1)
         st.rerun()
 
 # --- תצוגה ראשית ---
@@ -171,7 +164,6 @@ if frames:
                 save_data(df)
 
             st.divider()
-            
             frame_data = df[df['מסגרת'] == frame]
             for idx, row in frame_data.iterrows():
                 name = str(row['שם מלא'])
@@ -192,7 +184,7 @@ if frames:
                             st.write(f"~~{name}~~ (לא פעיל)")
                     with c2:
                         icon = "❌" if row['פעיל'] else "✅"
-                        if st.button(icon, key=f"btn_{idx}", help="השבת/החזר"):
+                        if st.button(icon, key=f"btn_{idx}"):
                             df.at[idx, 'פעיל'] = not row['פעיל']
                             if not df.at[idx, 'פעיל']: df.at[idx, 'נוכח'] = False
                             save_data(df)
@@ -202,7 +194,7 @@ st.divider()
 missing = df[active_mask & (df['נוכח'] == False)]['שם מלא'].tolist()
 if not missing and total_active > 0:
     st.success("🏁 כולם נוכחים!")
-    msg = urllib.parse.quote(f"דיווח נוכחות חטיבה 226 הושלם!\nסה''כ: {total_present} נוכחים.")
+    msg = urllib.parse.quote(f"בדיקת נוכחות גרביל הושלמה!\nסה''כ: {total_present} נוכחים.")
     st.link_button("📲 שלח עדכון בוואטסאפ", f"https://wa.me/?text={msg}")
 elif total_active > 0:
     st.warning(f"⚠️ חסרים עוד {len(missing)} אנשים.")
