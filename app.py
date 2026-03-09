@@ -80,7 +80,7 @@ def save_changes_to_cloud(df_to_save):
 
 # --- 3. שליחת התראות ---
 def send_push(active_df):
-    app_link = "https://attendance-226.streamlit.app"
+    app_link = "https://attendace-4wq3edrxk6hwohjswi4hjm.streamlit.app/"
     count = 0
     my_bar = st.progress(0, text="שולח התראות...")
     total = len(active_df)
@@ -98,7 +98,7 @@ def send_push(active_df):
 
 # --- 4. לוגיקה ראשית ---
 
-# טעינה ישירה (ללא session_state)
+# טעינה ישירה
 df = load_data_from_cloud()
 
 col_ref, col_info = st.columns([1, 4])
@@ -125,10 +125,13 @@ if not df.empty:
     frame_mask = (df['מסגרת'] == selected_frame) & (df['פעיל'] == True)
     display_df = df.loc[frame_mask, ['נוכח', 'שם מלא', 'מספר אישי', 'מפקד']]
     
+    # 🟢 צביעת עמודת הנוכחות ברקע ירוק עדין
+    styled_df = display_df.style.map(lambda _: 'background-color: rgba(40, 167, 69, 0.2);', subset=['נוכח'])
+    
     edited_df = st.data_editor(
-        display_df,
+        styled_df, # הכנסנו את הטבלה הצבועה לכאן
         column_config={
-            "נוכח": st.column_config.CheckboxColumn("הגיע?", default=False),
+            "נוכח": st.column_config.CheckboxColumn("🟢 הגיע?", default=False),
             "מפקד": st.column_config.CheckboxColumn("מפקד?", disabled=True),
              "שם מלא": st.column_config.TextColumn("שם מלא", disabled=True),
              "מספר אישי": st.column_config.TextColumn("מספר אישי", disabled=True),
@@ -140,20 +143,29 @@ if not df.empty:
     )
 
     if not edited_df.equals(display_df):
-        df.update(edited_df)
-        current_time = datetime.now().strftime("%H:%M")
+        st.warning("⚠️ ביצעת שינויים בטבלה. לחץ על הכפתור כדי לשמור אותם בענן:")
         
-        for idx in edited_df.index:
-            old_val = display_df.loc[idx, 'נוכח']
-            new_val = edited_df.loc[idx, 'נוכח']
-            if new_val and not old_val:
-                df.at[idx, 'זמן דיווח'] = current_time
-        
-        with st.spinner('שומר שינויים בענן...'):
-            save_changes_to_cloud(df)
-            st.success("השינויים נשמרו בהצלחה!")
-            time.sleep(1)
-            st.rerun()
+        # כפתור שמירה
+        if st.button("💾 שמור נוכחות", type="primary", use_container_width=True):
+            df.update(edited_df)
+            current_time = datetime.now().strftime("%H:%M")
+            
+            for idx in edited_df.index:
+                old_val = display_df.loc[idx, 'נוכח']
+                new_val = edited_df.loc[idx, 'נוכח']
+                if new_val and not old_val:
+                    df.at[idx, 'זמן דיווח'] = current_time
+            
+            with st.spinner('שולח נתונים לגוגל...'):
+                save_changes_to_cloud(df)
+                
+                # מחיקת הזיכרון לאחר שמירה
+                if 'editor' in st.session_state:
+                    del st.session_state['editor']
+                    
+                st.success("השינויים נשמרו בהצלחה!")
+                time.sleep(1)
+                st.rerun()
 
 # --- כפתורי ניהול ---
 with st.sidebar:
@@ -163,6 +175,10 @@ with st.sidebar:
         df['זמן דיווח'] = ""
         save_changes_to_cloud(df)
         
+        # מחיקת זיכרון העורך כדי להעלים את ה-Vים מהמסך
+        if 'editor' in st.session_state:
+            del st.session_state['editor']
+            
         active_soldiers = df[df['פעיל'] == True]
         count = send_push(active_soldiers)
         st.success(f"נשלחו {count} התראות")
@@ -170,11 +186,16 @@ with st.sidebar:
         st.rerun()
 
     st.divider()
-    # כפתור שמסתמך על selected_frame (הגנה מפני שגיאה אם הטבלה ריקה)
+    
     if 'selected_frame' in locals():
         if st.button(f"✅ סמן את כל מחלקה {selected_frame} כנוכחים"):
             mask = (df['מסגרת'] == selected_frame) & (df['פעיל'] == True)
             df.loc[mask, 'נוכח'] = True
             df.loc[mask, 'זמן דיווח'] = datetime.now().strftime("%H:%M")
             save_changes_to_cloud(df)
+            
+            # 🛠️ התיקון הקריטי: מחיקת זיכרון העורך כדי להכריח את ה-Vים להופיע!
+            if 'editor' in st.session_state:
+                del st.session_state['editor']
+                
             st.rerun()
