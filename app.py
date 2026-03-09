@@ -29,6 +29,10 @@ with col2:
 
 st.title("בדיקת נוכחות גרביל")
 
+# --- מפתח חכם לריענון הטבלה (התיקון לבאג ה"סמן הכל") ---
+if 'editor_key' not in st.session_state:
+    st.session_state.editor_key = 0
+
 # --- 2. מנגנון חיבור חכם ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
@@ -104,7 +108,8 @@ df = load_data_from_cloud()
 col_ref, col_info = st.columns([1, 4])
 with col_ref:
     if st.button("🔄 רענן נתונים"):
-        st.cache_data.clear() # מנקה את הזיכרון כדי לאלץ קריאה חדשה
+        st.cache_data.clear() 
+        st.session_state.editor_key += 1 # מכריח את הטבלה להתעדכן
         st.rerun()
 
 # חישוב סטטיסטיקה מתוך df
@@ -125,27 +130,27 @@ if not df.empty:
     frame_mask = (df['מסגרת'] == selected_frame) & (df['פעיל'] == True)
     display_df = df.loc[frame_mask, ['נוכח', 'שם מלא', 'מספר אישי', 'מפקד']]
     
-    # 🟢 צביעת עמודת הנוכחות ברקע ירוק עדין
+    # צביעת עמודת הנוכחות ברקע ירוק
     styled_df = display_df.style.map(lambda _: 'background-color: rgba(40, 167, 69, 0.2);', subset=['נוכח'])
     
     edited_df = st.data_editor(
-        styled_df, # הכנסנו את הטבלה הצבועה לכאן
+        styled_df,
         column_config={
-            "נוכח": st.column_config.CheckboxColumn("🟢 הגיע?", default=False),
+            "נוכח": st.column_config.CheckboxColumn("ירוק", default=False),
             "מפקד": st.column_config.CheckboxColumn("מפקד?", disabled=True),
              "שם מלא": st.column_config.TextColumn("שם מלא", disabled=True),
              "מספר אישי": st.column_config.TextColumn("מספר אישי", disabled=True),
         },
         disabled=["שם מלא", "מספר אישי", "מפקד"],
         hide_index=True,
-        key="editor",
+        # התיקון הקריטי: המפתח משתנה כשאנחנו רוצים לרענן בכוח את הטבלה
+        key=f"editor_{st.session_state.editor_key}",
         use_container_width=True
     )
 
     if not edited_df.equals(display_df):
         st.warning("⚠️ ביצעת שינויים בטבלה. לחץ על הכפתור כדי לשמור אותם בענן:")
         
-        # כפתור שמירה
         if st.button("💾 שמור נוכחות", type="primary", use_container_width=True):
             df.update(edited_df)
             current_time = datetime.now().strftime("%H:%M")
@@ -158,11 +163,7 @@ if not df.empty:
             
             with st.spinner('שולח נתונים לגוגל...'):
                 save_changes_to_cloud(df)
-                
-                # מחיקת הזיכרון לאחר שמירה
-                if 'editor' in st.session_state:
-                    del st.session_state['editor']
-                    
+                st.session_state.editor_key += 1 # איפוס הטבלה לאחר שמירה
                 st.success("השינויים נשמרו בהצלחה!")
                 time.sleep(1)
                 st.rerun()
@@ -175,9 +176,7 @@ with st.sidebar:
         df['זמן דיווח'] = ""
         save_changes_to_cloud(df)
         
-        # מחיקת זיכרון העורך כדי להעלים את ה-Vים מהמסך
-        if 'editor' in st.session_state:
-            del st.session_state['editor']
+        st.session_state.editor_key += 1 # מכריח את ה-Vים להיעלם מהמסך
             
         active_soldiers = df[df['פעיל'] == True]
         count = send_push(active_soldiers)
@@ -194,8 +193,6 @@ with st.sidebar:
             df.loc[mask, 'זמן דיווח'] = datetime.now().strftime("%H:%M")
             save_changes_to_cloud(df)
             
-            # 🛠️ התיקון הקריטי: מחיקת זיכרון העורך כדי להכריח את ה-Vים להופיע!
-            if 'editor' in st.session_state:
-                del st.session_state['editor']
+            st.session_state.editor_key += 1 # התיקון הקריטי: מכריח את הטבלה להתעדכן עם ה-Vים החדשים
                 
             st.rerun()
