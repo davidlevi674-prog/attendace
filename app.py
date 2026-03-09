@@ -31,7 +31,7 @@ with col2:
         # גיבוי בטקסט אם הקובץ לא נמצא
         st.markdown("<h2 style='text-align: center;'>🇮🇱</h2>", unsafe_allow_html=True)
 
-st.title("🇮🇱 בדיקת נוכחות גרביל")
+st.title("בדיקת נוכחות גרביל")
 
 # 2. חיבור ל-Google Sheets
 conn = st.connection("gsheets", type=GSheetsConnection)
@@ -83,7 +83,7 @@ def send_targeted_notifications(active_df):
     
     for index, row in active_df.iterrows():
         mi = str(row['מספר אישי']).strip()
-        topic = f"h226_{mi}"
+        topic = f"toto_{mi}"
         try:
             requests.post(f"https://ntfy.sh/{topic}", 
                 data="בוקר טוב! נפתח דיווח נוכחות גרביל. לחץ כאן למילוי.",
@@ -198,5 +198,6 @@ if not missing and total_active > 0:
     st.link_button("📲 שלח עדכון בוואטסאפ", f"https://wa.me/?text={msg}")
 elif total_active > 0:
     st.warning(f"⚠️ חסרים עוד {len(missing)} אנשים.")
+
 
 
