@@ -75,7 +75,7 @@ def save_data(df_to_save):
 
 # פונקציית התראות ntfy (שליחה רק לפעילים לפי מספר אישי)
 def send_targeted_notifications(active_df):
-    app_link = "https://attendance-226.streamlit.app" # וודא שזה הלינק הנכון
+    app_link = "https://attendace-4wq3edrxk6hwohjswi4hjm.streamlit.app/" # וודא שזה הלינק הנכון
     count = 0
     progress_text = "שולח התראות לחיילים פעילים..."
     my_bar = st.progress(0, text=progress_text)
@@ -198,3 +198,4 @@ if not missing and total_active > 0:
     st.link_button("📲 שלח עדכון בוואטסאפ", f"https://wa.me/?text={msg}")
 elif total_active > 0:
     st.warning(f"⚠️ חסרים עוד {len(missing)} אנשים.")
+
