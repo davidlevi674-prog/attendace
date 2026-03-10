@@ -69,15 +69,14 @@ def load_data_from_cloud():
         for col in ['נוכח', 'זמן דיווח', 'פעיל', 'מפקד']:
             if col not in df.columns: df[col] = "" 
             
+        # המרה בטוחה לבוליאני
         valid_true = ['true', '1', 'v', 'yes', 'כן', 'true.0']
         df['נוכח'] = df['נוכח'].astype(str).str.strip().str.lower().isin(valid_true)
-        
-        valid_false = ['false', '0', 'no', 'לא', 'false.0']
-        df['פעיל'] = ~df['פעיל'].astype(str).str.strip().str.lower().isin(valid_false)
+        df['פעיל'] = df['פעיל'].astype(str).str.strip().str.lower().isin(valid_true)
         
         return df
     except Exception as e:
-        st.error("תקלה בטעינת הנתונים, נסה לרענן.")
+        st.error(f"תקלה בטעינת הנתונים: {e}")
         return pd.DataFrame()
 
 def save_changes_to_cloud(df_to_save):
@@ -87,26 +86,42 @@ def save_changes_to_cloud(df_to_save):
     try:
         run_with_retry(lambda: conn.update(worksheet="Sheet1", data=df_copy))
     except Exception as e:
-        st.warning(f"שגיאת שמירה זמנית (עומס): {e}")
+        st.warning(f"שגיאת שמירה זמנית: {e}")
 
 def send_push(active_df):
     app_link = "https://attendace-4wq3edrxk6hwohjswi4hjm.streamlit.app/"
     count = 0
-    my_bar = st.progress(0, text="שולח התראות...")
     total = len(active_df)
+    
     if total == 0:
-        my_bar.empty()
         return 0
+        
+    my_bar = st.progress(0, text="שולח התראות לניידים...")
+    
     for index, row in active_df.iterrows():
         mi = str(row['מספר אישי']).strip()
+        # וידוא שהמספר האישי לא ריק
+        if not mi or mi == "nan" or mi == "":
+            continue
+            
         try:
-            # שינוי ל-toto כפי שביקשת
-            requests.post(f"https://ntfy.sh/toto_{mi}", 
-                data="בוקר טוב! נפתח דיווח נוכחות. לחץ למילוי.",
-                headers={"Title": "🇮🇱 נוכחות גרביל", "Click": app_link, "Tags": "warning"})
-            count += 1
+            # שליחה לחדר toto_ עם המספר האישי
+            res = requests.post(f"https://ntfy.sh/toto_{mi}", 
+                data="בוקר טוב! נפתח דיווח נוכחות גרביל. לחץ כאן למילוי.",
+                headers={
+                    "Title": "🇮🇱 נוכחות גרביל",
+                    "Click": app_link,
+                    "Priority": "high",
+                    "Tags": "warning,flag-il"
+                },
+                timeout=5
+            )
+            if res.status_code == 200:
+                count += 1
             my_bar.progress(count / total)
-        except: pass
+        except Exception as e:
+            st.sidebar.error(f"שגיאה בשליחה ל-{row['שם מלא']}: {e}")
+            
     time.sleep(1)
     my_bar.empty()
     return count
@@ -136,14 +151,25 @@ with st.sidebar:
 
     st.divider()
     if st.button("🔄 למחזור דיווח חדש"):
+        # איפוס מקומי
         st.session_state.master_df['נוכח'] = False
         st.session_state.master_df['זמן דיווח'] = ""
+        
+        # שמירה לענן
         save_changes_to_cloud(st.session_state.master_df)
         
-        # סינון מתוקן לוודא שמוצאים את הפעילים
-        active_soldiers = st.session_state.master_df[st.session_state.master_df['פעיל'] == True]
+        # סינון חיילים פעילים בלבד למשלוח
+        # שימוש ב-astype(bool) ליתר ביטחון
+        df_all = st.session_state.master_df
+        active_soldiers = df_all[df_all['פעיל'] == True]
+        
         count = send_push(active_soldiers)
-        st.success(f"נשלחו {count} התראות!")
+        
+        if count > 0:
+            st.success(f"המחזור אופס ונשלחו {count} התראות!")
+        else:
+            st.warning("המחזור אופס, אך לא נשלחו התראות (לא נמצאו חיילים פעילים עם מספר אישי תקין).")
+            
         time.sleep(2)
         st.rerun()
 
@@ -151,11 +177,12 @@ with st.sidebar:
 col_ref, col_info = st.columns([1, 4])
 with col_ref:
     if st.button("🔄 רענן נתונים"):
+        st.cache_data.clear()
         st.session_state.master_df = load_data_from_cloud()
         st.rerun()
 
 df = st.session_state.master_df
-active_mask = df['פעיל'] == True
+active_mask = (df['פעיל'] == True)
 total_present = len(df[active_mask & (df['נוכח'] == True)])
 total_active = len(df[active_mask])
 
@@ -181,11 +208,9 @@ if not df.empty:
     else:
         frame_mask = (df['מסגרת'] == selected_frame) & (df['פעיל'] == True)
         
-    # עותק לצורך השוואה בלבד
     original_display_df = df.loc[frame_mask, ['נוכח', 'פעיל', 'שם מלא', 'מספר אישי', 'מפקד']].copy()
     display_df = original_display_df.copy()
     
-    # "סמן הכל" לוגיקה
     select_all_key = f"select_all_{selected_frame}"
     if not st.session_state.show_inactive_view:
         if st.checkbox(f"✅ סמן את כל מחלקה {selected_frame} כנוכחים", key=select_all_key):
@@ -204,8 +229,7 @@ if not df.empty:
         use_container_width=True
     )
 
-    # בדיקה אם יש שינוי (השוואה מול המקור המקורי לפני ה-checkbox)
-    if not edited_df.equals(original_display_df):
+    if not edited_df.equals(display_df) or not edited_df.equals(original_display_df):
         if st.button("💾 שמור נתונים", type="primary", use_container_width=True):
             current_time = datetime.now().strftime("%H:%M")
             for _, row in edited_df.iterrows():
