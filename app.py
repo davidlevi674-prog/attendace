@@ -164,7 +164,6 @@ with st.sidebar:
                 if key.startswith("editor_") or key.startswith("select_all_"):
                     del st.session_state[key]
             
-            # ההגנה על ההתראות - נשלח רק למי שמוגדר כפעיל
             active_soldiers = st.session_state.master_df[st.session_state.master_df['פעיל'] == True]
             count = send_push(active_soldiers)
             st.success(f"נשלחו {count} התראות. מחזור חדש התחיל!")
@@ -175,12 +174,12 @@ with st.sidebar:
 
 col_ref, col_info = st.columns([1, 4])
 with col_ref:
-    if st.button("🔄 רענן נתונים מגוגל"):
+    if st.button("🔄 רענן נתונים"):
         st.cache_data.clear()
         st.session_state.master_df = load_data_from_cloud()
         st.rerun()
 
-# חישוב סטטיסטיקה מתוך הזיכרון המקומי (סופר אך ורק פעילים)
+# חישוב סטטיסטיקה מתוך הזיכרון המקומי
 df = st.session_state.master_df
 active_mask = df['פעיל'] == True
 total_present = len(df[active_mask & (df['נוכח'] == True)])
@@ -196,30 +195,46 @@ if not df.empty:
     frames = sorted(df['מסגרת'].unique().tolist())
     selected_frame = st.selectbox("בחר מחלקה לצפייה וסימון:", frames)
     
-    # מסננים את המחלקה (כולל את כולם, גם הלא פעילים כדי שנוכל לראות אותם עם הפס עליהם)
-    frame_mask = (df['מסגרת'] == selected_frame)
+    # --- כפתור חדש לרשימת הלא פעילים ---
+    if 'show_inactive_view' not in st.session_state:
+        st.session_state.show_inactive_view = False
+        
+    if st.button("👁️ חזור לרשימת פעילים" if st.session_state.show_inactive_view else "👁️ רשימת לא פעילים"):
+        st.session_state.show_inactive_view = not st.session_state.show_inactive_view
+        st.rerun()
+        
+    if st.session_state.show_inactive_view:
+        frame_mask = (df['מסגרת'] == selected_frame) & (df['פעיל'] == False)
+        st.subheader("רשימת חיילים לא פעילים (בחר 'פעיל' ושמור כדי להחזירם)")
+    else:
+        frame_mask = (df['מסגרת'] == selected_frame) & (df['פעיל'] == True)
+        
     display_df = df.loc[frame_mask, ['נוכח', 'פעיל', 'שם מלא', 'מספר אישי', 'מפקד']].copy()
     
-    # צ'קבוקס "סמן הכל" - מדלג על לא פעילים!
-    select_all_key = f"select_all_{selected_frame}"
-    if st.checkbox(f"✅ סמן את כל מחלקה {selected_frame} כנוכחים", key=select_all_key):
-        display_df.loc[display_df['פעיל'] == True, 'נוכח'] = True 
+    select_all_key = f"select_all_{selected_frame}_{st.session_state.show_inactive_view}"
+    # מציג את אופציית 'סמן הכל' רק כשאנחנו בטבלת הפעילים
+    if not st.session_state.show_inactive_view:
+        if st.checkbox(f"✅ סמן את כל מחלקה {selected_frame} כנוכחים", key=select_all_key):
+            display_df.loc[display_df['פעיל'] == True, 'נוכח'] = True 
     
-    # --- פונקציית העיצוב (הקסם של הצבע האפור והקו החוצה) ---
-    def style_inactive_rows(row):
+    # --- העיצוב ---
+    def style_table(row):
+        styles = [''] * len(row)
         if not row['פעיל']:
-            # אם החייל לא פעיל - כל השורה מקבלת צבע אפור כהה וקו חוצה
-            return ['color: #888888; text-decoration: line-through;'] * len(row)
-        return [''] * len(row)
+            return ['color: #666666; text-decoration: line-through; background-color: #333333;'] * len(row)
+        else:
+            for i, col in enumerate(row.index):
+                if col == 'נוכח':
+                    styles[i] = 'background-color: rgba(40, 167, 69, 0.2);'
+            return styles
+            
+    styled_df = display_df.style.apply(style_table, axis=1)
         
-    # מחילים את העיצוב על הטבלה
-    styled_df = display_df.style.apply(style_inactive_rows, axis=1)
-        
-    editor_key = f"editor_{selected_frame}"
+    editor_key = f"editor_{selected_frame}_{st.session_state.show_inactive_view}"
     edited_df = st.data_editor(
-        styled_df, # מעבירים את הטבלה המעוצבת לעורך
+        styled_df,
         column_config={
-            "נוכח": st.column_config.CheckboxColumn("🟢 ירוק", default=False),
+            "נוכח": st.column_config.CheckboxColumn("🟢 נמצא?", default=False),
             "פעיל": st.column_config.CheckboxColumn("פעיל?", default=True),
             "מפקד": st.column_config.CheckboxColumn("מפקד?", disabled=True),
             "שם מלא": st.column_config.TextColumn("שם מלא", disabled=True),
@@ -237,12 +252,9 @@ if not df.empty:
         if st.button("💾 שמור נתונים", type="primary", use_container_width=True):
             current_time = datetime.now().strftime("%H:%M")
             
-            # 1. מעדכנים קודם כל את הזיכרון המקומי!
             for _, row in edited_df.iterrows():
                 mi = row['מספר אישי']
                 new_val_active = row['פעיל']
-                
-                # אם מישהו ניסה לסמן נוכחות לחייל לא פעיל, המערכת דורסת את זה ומחזירה ל-False
                 new_val_present = row['נוכח'] if new_val_active else False
                 
                 df_indices = st.session_state.master_df.index[st.session_state.master_df['מספר אישי'] == mi].tolist()
@@ -256,7 +268,6 @@ if not df.empty:
                     if new_val_present == True and old_val_present == False:
                         st.session_state.master_df.at[idx, 'זמן דיווח'] = current_time
             
-            # 2. שולחים לגוגל
             with st.spinner('מעדכן נתונים בענן...'):
                 save_changes_to_cloud(st.session_state.master_df)
                 
