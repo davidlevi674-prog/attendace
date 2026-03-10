@@ -6,7 +6,7 @@ import requests
 import time
 import os
 
-# --- 1. הגדרות ועיצוב (מותאם למובייל - ללא סרגל צד) ---
+# --- 1. הגדרות ועיצוב ---
 st.set_page_config(page_title="בדיקת נוכחות גרביל", layout="wide", page_icon="logo.png")
 
 st.markdown("""
@@ -17,14 +17,13 @@ st.markdown("""
     div[data-baseweb="input"] input { color: black !important; }
     div[data-baseweb="select"] span { color: black !important; }
     
-    /* מחיקת הסרגל הצדדי לגמרי מכל המסכים למען ממשק נקי */
+    /* מחיקת הסרגל הצדדי */
     [data-testid="collapsedControl"] { display: none !important; }
     [data-testid="stSidebar"] { display: none !important; }
     
-    /* ריווח נוח לסמארטפון */
     .main .block-container { padding-top: 2rem !important; }
 
-    /* עיצוב כפתורים זהב (ראשי) */
+    /* עיצוב כפתורים */
     div.stButton > button { 
         background-color: #D4AF37 !important; 
         border-radius: 10px !important; 
@@ -35,7 +34,6 @@ st.markdown("""
         height: 3em;
     }
     
-    /* כפתור מחיקה אדום */
     .stButton button[kind="primary"] {
         background-color: #ff4b4b !important;
         color: white !important;
@@ -66,19 +64,18 @@ def run_with_retry(func, retries=3, delay=1):
                 continue
             raise e
 
-# משיכת נתונים עם הגנת עומס של 3 שניות
-@st.cache_data(ttl=3)
-def fetch_data_cached():
-    df = run_with_retry(lambda: conn.read(worksheet="Sheet1", ttl=0))
-    return df
+def parse_bool(val):
+    # פונקציה חסינת-כדורים להמרת כל ערך מגוגל לאמת/שקר
+    if isinstance(val, bool): return val
+    if pd.isna(val): return False
+    val_str = str(val).strip().lower()
+    return val_str in ['true', '1', '1.0', 'v', 'yes', 'כן', 't']
 
 def load_data_from_cloud(force_fresh=False):
     try:
-        # אם יש דרישה למידע הכי טרי (לפני שמירה), נעקוף את הזיכרון
-        if force_fresh:
-            fetch_data_cached.clear()
-            
-        df = fetch_data_cached().copy()
+        # שימוש ב-ttl=0 עוקף כל מטמון ומביא נתונים ישירות מגוגל
+        ttl_val = 0 if force_fresh else 2
+        df = run_with_retry(lambda: conn.read(worksheet="Sheet1", ttl=ttl_val))
         df.columns = [str(c).strip() for c in df.columns]
         
         def clean_frame(val):
@@ -93,9 +90,9 @@ def load_data_from_cloud(force_fresh=False):
         for col in ['נוכח', 'זמן דיווח', 'פעיל', 'מפקד']:
             if col not in df.columns: df[col] = "" 
             
-        valid_true = ['true', '1', 'v', 'yes', 'כן', 'true.0', 't']
-        df['נוכח'] = df['נוכח'].astype(str).str.strip().str.lower().isin(valid_true)
-        df['פעיל'] = df['פעיל'].astype(str).str.strip().str.lower().isin(valid_true)
+        # שימוש בפונקציה החדשה והחזקה
+        df['נוכח'] = df['נוכח'].apply(parse_bool)
+        df['פעיל'] = df['פעיל'].apply(parse_bool)
         
         return df
     except Exception as e:
@@ -108,7 +105,7 @@ def save_changes_to_cloud(df_to_save):
     df_copy['פעיל'] = df_copy['פעיל'].apply(lambda x: 'TRUE' if x else 'FALSE')
     try:
         run_with_retry(lambda: conn.update(worksheet="Sheet1", data=df_copy))
-        fetch_data_cached.clear()
+        st.cache_data.clear() # ניקוי מטמון כללי לאחר שמירה
     except Exception as e:
         st.warning(f"שגיאת שמירה: {e}")
 
@@ -136,13 +133,12 @@ def send_push(active_df):
     time.sleep(1); my_bar.empty()
     return count
 
-# --- 3. לוגיקה ראשית וממשק חיילים ---
+# --- 3. לוגיקה ראשית וממשק ---
 
-# כפתור רענון אחד ויחיד בחלק העליון
 col_ref, col_info = st.columns([1, 4])
 with col_ref:
     if st.button("🔄 רענן נתונים"):
-        fetch_data_cached.clear()
+        st.cache_data.clear() # ניקוי אגרסיבי שיסנכרן את הפלאפון והמחשב
         st.rerun()
 
 df = load_data_from_cloud()
@@ -192,48 +188,46 @@ if not df.empty:
         use_container_width=True
     )
 
-    # --- מנגנון השמירה החכם (מונע התנגשויות) ---
+    # מנגנון שמירה חכם שמונע התנגשויות 
     if not edited_df.equals(original_display_df):
         if st.button("💾 שמור דיווח", use_container_width=True):
             with st.spinner("מסנכרן נתונים מול שאר הפלוגה..."):
                 current_time = datetime.now().strftime("%H:%M")
-                
-                # משיכת הנתונים הכי מעודכנים שיש כרגע בענן!
                 latest_df = load_data_from_cloud(force_fresh=True)
+                updated = False
                 
-                # הלבשת השינויים שלנו על הנתונים המעודכנים
                 for _, row in edited_df.iterrows():
                     mi = row['מספר אישי']
-                    
-                    # בדיקה מה המשתמש שינה בפועל במסך שלו
                     orig_present = original_display_df[original_display_df['מספר אישי'] == mi]['נוכח'].values[0]
                     orig_active = original_display_df[original_display_df['מספר אישי'] == mi]['פעיל'].values[0]
                     
-                    # אם החייל הזה ספציפית שונה - נעדכן אותו
                     if row['נוכח'] != orig_present or row['פעיל'] != orig_active:
                         idx_list = latest_df.index[latest_df['מספר אישי'] == mi].tolist()
                         if idx_list:
                             idx = idx_list[0]
                             old_latest_present = latest_df.at[idx, 'נוכח']
-                            
                             latest_df.at[idx, 'נוכח'] = row['נוכח']
                             latest_df.at[idx, 'פעיל'] = row['פעיל']
-                            
-                            # עדכון שעה רק אם הרגע סומן נוכח
                             if row['נוכח'] and not old_latest_present: 
                                 latest_df.at[idx, 'זמן דיווח'] = current_time
+                            updated = True
                 
-                # שיגור הנתונים המאוחדים חזרה לענן
-                save_changes_to_cloud(latest_df)
-                st.success("הדיווח נקלט בהצלחה!")
+                if updated:
+                    save_changes_to_cloud(latest_df)
+                    st.success("הדיווח נקלט בהצלחה!")
+                    
+                    # ניקוי זיכרון הממשק - קריטי כדי לראות את השינוי מיד!
+                    if editor_key in st.session_state: del st.session_state[editor_key]
+                    if f"all_p_{selected_frame}" in st.session_state: del st.session_state[f"all_p_{selected_frame}"]
+                    if f"all_a_{selected_frame}" in st.session_state: del st.session_state[f"all_a_{selected_frame}"]
+                
                 time.sleep(1)
                 st.rerun()
 
     st.divider()
 
-    # --- 4. אזור מפקדים (במקום סרגל צד) ---
+    # --- 4. אזור מפקדים ---
     with st.expander("⚙️ אזור מפקדים (הוספה, מחיקה ואיפוס)"):
-        
         st.markdown("#### ניהול כוח אדם")
         col_add_name, col_add_mi = st.columns(2)
         n_name = col_add_name.text_input("שם מלא (חייל חדש):")
