@@ -29,15 +29,10 @@ with col2:
 
 st.title("בדיקת נוכחות גרביל")
 
-# --- מפתח חכם לריענון הטבלה (התיקון לבאג ה"סמן הכל") ---
-if 'editor_key' not in st.session_state:
-    st.session_state.editor_key = 0
-
 # --- 2. מנגנון חיבור חכם ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def run_with_retry(func, retries=3, delay=2):
-    """מנגנון ניסיון חוזר למניעת קריסות מול גוגל"""
     for i in range(retries):
         try:
             return func()
@@ -49,8 +44,8 @@ def run_with_retry(func, retries=3, delay=2):
             raise e
 
 def load_data_from_cloud():
-    """טוען נתונים מהענן"""
     try:
+        # קריאה מהענן עם זיכרון קצר של 5 שניות
         df = run_with_retry(lambda: conn.read(worksheet="Sheet1", ttl=5))
         df.columns = df.columns.str.strip()
         
@@ -66,6 +61,7 @@ def load_data_from_cloud():
         for col in ['נוכח', 'זמן דיווח', 'פעיל', 'מפקד']:
             if col not in df.columns: df[col] = "" 
             
+        # המרה קפדנית לאמת/שקר כדי שהצ'קבוקסים יעבדו מושלם
         df['נוכח'] = df['נוכח'].apply(lambda x: True if str(x).lower() in ['true', '1', 'v'] else False)
         df['פעיל'] = df['פעיל'].apply(lambda x: False if str(x).lower() in ['false', '0'] else True)
         
@@ -75,10 +71,9 @@ def load_data_from_cloud():
         return pd.DataFrame()
 
 def save_changes_to_cloud(df_to_save):
-    """שומר את הטבלה המעודכנת לענן"""
     try:
         run_with_retry(lambda: conn.update(worksheet="Sheet1", data=df_to_save))
-        st.cache_data.clear()
+        st.cache_data.clear() # חובה לנקות כדי שהטעינה הבאה תביא נתונים חדשים
     except Exception as e:
         st.warning(f"שגיאת שמירה זמנית (עומס): {e}")
 
@@ -102,17 +97,17 @@ def send_push(active_df):
 
 # --- 4. לוגיקה ראשית ---
 
-# טעינה ישירה
-df = load_data_from_cloud()
+# טעינת בסיס הנתונים האמיתי מגוגל שיטס
+original_df = load_data_from_cloud()
+df = original_df.copy() # עותק לעבודה
 
 col_ref, col_info = st.columns([1, 4])
 with col_ref:
     if st.button("🔄 רענן נתונים"):
         st.cache_data.clear() 
-        st.session_state.editor_key += 1 # מכריח את הטבלה להתעדכן
         st.rerun()
 
-# חישוב סטטיסטיקה מתוך df
+# חישוב סטטיסטיקה 
 active_mask = df['פעיל'] == True
 total_present = len(df[active_mask & (df['נוכח'] == True)])
 total_active = len(df[active_mask])
@@ -124,75 +119,67 @@ with col_info:
 st.divider()
 
 if not df.empty:
+    # בחירת מחלקה
     frames = sorted(df['מסגרת'].unique().tolist())
     selected_frame = st.selectbox("בחר מחלקה לצפייה וסימון:", frames)
     
+    # סינון לטבלה המוצגת
     frame_mask = (df['מסגרת'] == selected_frame) & (df['פעיל'] == True)
-    display_df = df.loc[frame_mask, ['נוכח', 'שם מלא', 'מספר אישי', 'מפקד']]
+    display_df = df.loc[frame_mask, ['נוכח', 'שם מלא', 'מספר אישי', 'מפקד']].copy()
     
-    # צביעת עמודת הנוכחות ברקע ירוק
-    styled_df = display_df.style.map(lambda _: 'background-color: rgba(40, 167, 69, 0.2);', subset=['נוכח'])
+    # --- הרעיון שלך: צ'קבוקס "סמן הכל" מעל הטבלה ---
+    if st.checkbox(f"✅ סמן את כל מחלקה {selected_frame}", key=f"select_all_{selected_frame}"):
+        display_df['נוכח'] = True # משנה את כל העמודה ל-True לפני שהיא נכנסת לטבלה
     
+    # הצגת הטבלה לעריכה
     edited_df = st.data_editor(
-        styled_df,
+        display_df,
         column_config={
-            "נוכח": st.column_config.CheckboxColumn("ירוק", default=False),
+            "נוכח": st.column_config.CheckboxColumn("🟢 ירוק", default=False),
             "מפקד": st.column_config.CheckboxColumn("מפקד?", disabled=True),
-             "שם מלא": st.column_config.TextColumn("שם מלא", disabled=True),
-             "מספר אישי": st.column_config.TextColumn("מספר אישי", disabled=True),
+            "שם מלא": st.column_config.TextColumn("שם מלא", disabled=True),
+            "מספר אישי": st.column_config.TextColumn("מספר אישי", disabled=True),
         },
         disabled=["שם מלא", "מספר אישי", "מפקד"],
         hide_index=True,
-        # התיקון הקריטי: המפתח משתנה כשאנחנו רוצים לרענן בכוח את הטבלה
-        key=f"editor_{st.session_state.editor_key}",
         use_container_width=True
     )
 
-    if not edited_df.equals(display_df):
-        st.warning("⚠️ ביצעת שינויים בטבלה. לחץ על הכפתור כדי לשמור אותם בענן:")
+    # --- מנגנון השמירה ---
+    # בודקים אם יש הבדל בין מה שהמשתמש רואה כרגע לבין מה שהיה במקור בגוגל
+    original_frame_df = original_df.loc[frame_mask, ['נוכח', 'שם מלא', 'מספר אישי', 'מפקד']]
+    
+    if not edited_df.equals(original_frame_df):
+        st.warning("⚠️ ביצעת שינויים בנוכחות. לחץ כאן כדי לשמור בענן:")
         
-        if st.button("💾 שמור נוכחות", type="primary", use_container_width=True):
+        if st.button("💾 שמור נתונים", type="primary", use_container_width=True):
+            # מעדכנים את הטבלה הראשית עם השינויים
             df.update(edited_df)
             current_time = datetime.now().strftime("%H:%M")
             
+            # מעדכנים את שעת הדיווח רק למי שהשתנה מ'לא נוכח' ל'נוכח'
             for idx in edited_df.index:
-                old_val = display_df.loc[idx, 'נוכח']
+                old_val = original_df.loc[idx, 'נוכח']
                 new_val = edited_df.loc[idx, 'נוכח']
-                if new_val and not old_val:
+                if new_val == True and old_val == False:
                     df.at[idx, 'זמן דיווח'] = current_time
             
             with st.spinner('שולח נתונים לגוגל...'):
                 save_changes_to_cloud(df)
-                st.session_state.editor_key += 1 # איפוס הטבלה לאחר שמירה
-                st.success("השינויים נשמרו בהצלחה!")
+                st.success("הנתונים נשמרו בהצלחה!")
                 time.sleep(1)
                 st.rerun()
 
-# --- כפתורי ניהול ---
+# --- כפתורי מנהל בסרגל הצד ---
 with st.sidebar:
     st.header("מנהל")
     if st.button("🔄 התחל יום חדש + שלח התראות"):
         df['נוכח'] = False
         df['זמן דיווח'] = ""
         save_changes_to_cloud(df)
-        
-        st.session_state.editor_key += 1 # מכריח את ה-Vים להיעלם מהמסך
             
         active_soldiers = df[df['פעיל'] == True]
         count = send_push(active_soldiers)
-        st.success(f"נשלחו {count} התראות")
+        st.success(f"נשלחו {count} התראות. מתחיל יום חדש!")
         time.sleep(2)
         st.rerun()
-
-    st.divider()
-    
-    if 'selected_frame' in locals():
-        if st.button(f"✅ סמן את כל מחלקה {selected_frame} כנוכחים"):
-            mask = (df['מסגרת'] == selected_frame) & (df['פעיל'] == True)
-            df.loc[mask, 'נוכח'] = True
-            df.loc[mask, 'זמן דיווח'] = datetime.now().strftime("%H:%M")
-            save_changes_to_cloud(df)
-            
-            st.session_state.editor_key += 1 # התיקון הקריטי: מכריח את הטבלה להתעדכן עם ה-Vים החדשים
-                
-            st.rerun()
