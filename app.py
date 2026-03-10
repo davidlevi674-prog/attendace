@@ -86,4 +86,5 @@ def load_data_from_cloud():
 
 def save_changes_to_cloud(df_to_save):
     df_copy = df_to_save.copy()
-    df_copy['נוכח'] = df_copy['נוכח'].apply(lambda x: 'TRUE' if x else 'FALSE
+    df_copy['נוכח'] = df_copy['נוכח'].apply(lambda x: 'TRUE' if x else 'FALSE'
+
