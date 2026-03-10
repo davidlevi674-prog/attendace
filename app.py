@@ -112,7 +112,7 @@ def send_push(active_df):
     for index, row in active_df.iterrows():
         mi = str(row['מספר אישי']).strip()
         try:
-            requests.post(f"https://ntfy.sh/h226_{mi}", 
+            requests.post(f"https://ntfy.sh/toto_{mi}", 
                 data="בוקר טוב! נפתח דיווח נוכחות. לחץ למילוי.",
                 headers={"Title": "🇮🇱 נוכחות גרביל", "Click": app_link, "Tags": "warning"})
             count += 1
@@ -279,3 +279,4 @@ if not df.empty:
                 st.success("הנתונים נשמרו בהצלחה!")
                 time.sleep(0.5)
                 st.rerun()
+
