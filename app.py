@@ -25,6 +25,11 @@ st.markdown("""
     div.stButton > button p, div.stButton > button span { 
         color: black !important; font-weight: bold !important; 
     }
+    /* עיצוב כפתור מחיקה אדום */
+    .stButton button[kind="secondary"] {
+        background-color: #ff4b4b !important;
+        color: white !important;
+    }
     div[data-testid="stDataEditor"] { direction: rtl; }
     </style>
     """, unsafe_allow_html=True)
@@ -128,10 +133,42 @@ if "master_df" not in st.session_state:
 
 with st.sidebar:
     st.header("⚙️ מנהל")
-    if st.button("🔄 רענן נתונים"):
-        st.cache_data.clear()
-        st.session_state.master_df = load_data_from_cloud()
-        st.rerun()
+    
+    # הוספת חייל חדש
+    with st.expander("➕ הוספת חייל חדש"):
+        n_name = st.text_input("שם מלא:")
+        n_mi = st.text_input("מספר אישי (להוספה):")
+        frames_list = sorted(st.session_state.master_df['מסגרת'].unique().tolist()) if not st.session_state.master_df.empty else ["1"]
+        n_frame = st.selectbox("מסגרת (מחלקה):", frames_list)
+        n_is_comm = st.checkbox("מפקד?")
+        if st.button("הוסף לרשימה"):
+            if n_name and n_mi:
+                new_row = pd.DataFrame([{
+                    "שם מלא": n_name, "מסגרת": str(n_frame), "מספר אישי": str(n_mi).strip(), 
+                    "מפקד": n_is_comm, "נוכח": False, "זמן דיווח": "", "פעיל": True
+                }])
+                st.session_state.master_df = pd.concat([st.session_state.master_df, new_row], ignore_index=True)
+                save_changes_to_cloud(st.session_state.master_df)
+                st.success("החייל הוסף!")
+                st.rerun()
+            else:
+                st.warning("נא למלא שם ומספר אישי.")
+
+    # מחיקת חייל לצמיתות
+    with st.expander("🗑️ מחיקת חייל לצמיתות"):
+        st.write("פעולה זו תמחק את החייל גם מגוגל שיטס!")
+        del_mi = st.text_input("הזן מספר אישי למחיקה:")
+        if st.button("מחק חייל לצמיתות", kind="secondary"):
+            if del_mi:
+                idx_list = st.session_state.master_df.index[st.session_state.master_df['מספר אישי'] == del_mi.strip()].tolist()
+                if idx_list:
+                    st.session_state.master_df = st.session_state.master_df.drop(idx_list)
+                    save_changes_to_cloud(st.session_state.master_df)
+                    st.success("החייל נמחק בהצלחה!")
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.error("מספר אישי לא נמצא.")
 
     st.divider()
     if st.button("🔄 למחזור דיווח חדש"):
@@ -173,7 +210,6 @@ if not df.empty:
     original_display_df = df.loc[frame_mask, ['נוכח', 'פעיל', 'שם מלא', 'מספר אישי', 'מפקד']].copy()
     display_df = original_display_df.copy()
     
-    # --- הוספת צ'קבוקס "סמן הכל" דינמי ---
     if is_active_view:
         if st.checkbox(f"✅ סמן את כל מחלקה {selected_frame} כנוכחים", key=f"all_p_{selected_frame}"):
             display_df['נוכח'] = True
