@@ -6,7 +6,7 @@ import requests
 import time
 import os
 
-# --- 1. הגדרות ועיצוב (מותאם לסמארטפון) ---
+# --- 1. הגדרות ועיצוב (מותאם למניעת דריסת ה-Sidebar) ---
 st.set_page_config(page_title="בדיקת נוכחות גרביל", layout="wide", page_icon="logo.png")
 
 st.markdown("""
@@ -19,11 +19,19 @@ st.markdown("""
     div[data-baseweb="input"] input { color: black !important; }
     div[data-baseweb="select"] span { color: black !important; }
     
-    /* התאמה לסמארטפון - צמצום רווחים */
-    @media (max-width: 640px) {
-        .main .block-container { padding: 1rem 0.5rem !important; }
-        h1 { font-size: 1.5rem !important; }
-        div.stButton > button { width: 100% !important; margin-bottom: 5px; }
+    /* פתרון לבעיית ה-Sidebar בסמארטפון */
+    @media (max-width: 768px) {
+        /* הסתרת הסרגל שלא יצוף מעל התוכן */
+        [data-testid="stSidebar"][aria-expanded="true"] {
+            width: 80vw !important;
+        }
+        /* מניעת דריסה של התוכן הראשי */
+        .main .block-container { 
+            padding-top: 2rem !important; 
+            padding-right: 1rem !important; 
+            padding-left: 1rem !important; 
+        }
+        h1 { font-size: 1.4rem !important; margin-top: 10px !important; }
     }
 
     /* עיצוב כפתורים זהב */
@@ -33,7 +41,6 @@ st.markdown("""
         border: none !important; 
         color: black !important;
         font-weight: bold !important;
-        height: 3em;
     }
     
     /* כפתור מחיקה אדום */
@@ -46,10 +53,11 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
+# סידור לוגו - בטלפון הוא יהיה קטן יותר כדי לא לתפוס מקום
 col1, col2, col3 = st.columns([1,1,1])
 with col2:
     if os.path.exists("logo.png"):
-        st.image("logo.png", width=120)
+        st.image("logo.png", width=100)
     else:
         st.markdown("<h2 style='text-align: center;'>🇮🇱</h2>", unsafe_allow_html=True)
 
@@ -146,13 +154,11 @@ if "master_df" not in st.session_state:
 with st.sidebar:
     st.header("⚙️ מנהל")
     
-    # כפתור רענן נתונים (הוחזר)
     if st.button("🔄 רענן נתונים"):
         st.cache_data.clear()
         st.session_state.master_df = load_data_from_cloud()
         st.rerun()
 
-    # הוספת חייל חדש
     with st.expander("➕ הוספת חייל חדש"):
         n_name = st.text_input("שם מלא:")
         n_mi_input = st.text_input("מספר אישי (להוספה):")
@@ -170,7 +176,6 @@ with st.sidebar:
                 st.success("החייל הוסף!")
                 st.rerun()
 
-    # מחיקת חייל לצמיתות
     with st.expander("🗑️ מחיקת חייל לצמיתות"):
         del_mi = st.text_input("מספר אישי למחיקה:")
         if st.button("מחק חייל", type="primary"):
@@ -214,7 +219,7 @@ if not df.empty:
         st.session_state.show_inactive_view = False
         
     btn_label = "👁️ רשימת פעילים" if st.session_state.show_inactive_view else "👁️ רשימת לא פעילים"
-    if st.button(btn_label):
+    if st.button(btn_label, use_container_width=True):
         st.session_state.show_inactive_view = not st.session_state.show_inactive_view
         st.rerun()
         
@@ -225,7 +230,7 @@ if not df.empty:
     display_df = original_display_df.copy()
     
     if is_active_view:
-        if st.checkbox(f"✅ סמן הכל כנוכחים ({selected_frame})", key=f"all_p_{selected_frame}"):
+        if st.checkbox(f"✅ סמן הכל ({selected_frame})", key=f"all_p_{selected_frame}"):
             display_df['נוכח'] = True
     else:
         if st.checkbox(f"✅ סמן הכל כפעילים ({selected_frame})", key=f"all_a_{selected_frame}"):
@@ -235,8 +240,8 @@ if not df.empty:
     edited_df = st.data_editor(
         display_df,
         column_config={
-            "נוכח": st.column_config.CheckboxColumn("🟢", default=False),
-            "פעיל": st.column_config.CheckboxColumn("פעיל", default=True),
+            "נוכח": st.column_config.CheckboxColumn("🟢", default=False, width="small"),
+            "פעיל": st.column_config.CheckboxColumn("פעיל", default=True, width="small"),
             "שם מלא": st.column_config.TextColumn("שם"),
         },
         disabled=["שם מלא", "מספר אישי", "מפקד"],
