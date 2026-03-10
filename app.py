@@ -69,7 +69,7 @@ def load_data_from_cloud():
         for col in ['נוכח', 'זמן דיווח', 'פעיל', 'מפקד']:
             if col not in df.columns: df[col] = "" 
             
-        # חזרה להמרה המדויקת ("ביטול הסלחנות")
+        # המרה בטוחה: מנקה רווחים והופך לקטן לפני הבדיקה
         valid_true = ['true', '1', 'v', 'yes', 'כן', 'true.0']
         df['נוכח'] = df['נוכח'].astype(str).str.strip().str.lower().isin(valid_true)
         df['פעיל'] = df['פעיל'].astype(str).str.strip().str.lower().isin(valid_true)
@@ -103,7 +103,7 @@ def send_push(active_df):
             
         topic = f"toto_{mi}"
         try:
-            # שימוש ב-Headers עבור עברית כדי למנוע שגיאות קידוד
+            # תיקון קידוד עברית ב-Headers
             requests.post(
                 f"https://ntfy.sh/{topic}", 
                 data="Attendance Check is open".encode('utf-8'),
@@ -212,7 +212,6 @@ if not df.empty:
         use_container_width=True
     )
 
-    # התיקון: השוואה למקור האמיתי כדי להציג כפתור שמירה גם אחרי "סמן הכל"
     if not edited_df.equals(original_display_df):
         if st.button("💾 שמור נתונים", type="primary", use_container_width=True):
             current_time = datetime.now().strftime("%H:%M")
