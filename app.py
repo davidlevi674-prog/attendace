@@ -64,13 +64,14 @@ def load_data_from_cloud():
             
         if 'מסגרת' in df.columns: df['מסגרת'] = df['מסגרת'].apply(clean_frame)
         
-        # ניקוי מספר אישי - קריטי להתראות
+        # ניקוי מספר אישי למניעת .0 בסוף
         if 'מספר אישי' in df.columns: 
             df['מספר אישי'] = df['מספר אישי'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
             
         for col in ['נוכח', 'זמן דיווח', 'פעיל', 'מפקד']:
             if col not in df.columns: df[col] = "" 
             
+        # המרה בוליאנית גמישה
         invalid_vals = ['false', '0', 'no', 'לא', 'false.0', 'nan', '', 'none']
         df['נוכח'] = df['נוכח'].astype(str).str.strip().str.lower().apply(lambda x: x not in invalid_vals)
         df['פעיל'] = df['פעיל'].astype(str).str.strip().str.lower().apply(lambda x: x not in invalid_vals)
@@ -101,32 +102,36 @@ def send_push(active_df):
     my_bar = st.progress(0, text="שולח התראות לניידים...")
     
     for index, row in active_df.iterrows():
-        # המרה בטוחה של מספר אישי לטקסט נקי
-        mi = str(row['מספר אישי']).split('.')[0].strip()
+        # ניקוי אגרסיבי למספר האישי - לוקחים רק את הספרות
+        mi_raw = str(row['מספר אישי']).strip()
+        mi = "".join(filter(str.isdigit, mi_raw))
         
-        if not mi or mi == "nan" or mi == "" or mi == "None":
+        if not mi:
             continue
             
+        topic = f"toto_{mi}"
+        # הודעת לוג זמנית בסרגל צד כדי שתראה מה קורה
+        st.sidebar.write(f"📡 שולח ל: {topic} ({row['שם מלא']})")
+        
         try:
-            # שליחה לחדר toto_ עם המספר האישי
-            topic = f"toto_{mi}"
-            res = requests.post(f"https://ntfy.sh/{topic}", 
-                data="בוקר טוב! נפתח דיווח נוכחות גרביל. לחץ כאן למילוי.",
+            res = requests.post(
+                f"https://ntfy.sh/{topic}", 
+                data="בוקר טוב! נפתח דיווח נוכחות גרביל. לחץ כאן למילוי.".encode('utf-8'),
                 headers={
                     "Title": "🇮🇱 נוכחות גרביל",
                     "Click": app_link,
-                    "Priority": "high",
+                    "Priority": "5", # הכי גבוה ב-ntfy
                     "Tags": "warning,flag-il"
                 },
-                timeout=5
+                timeout=10
             )
             if res.status_code == 200:
                 count += 1
             my_bar.progress(count / total)
         except Exception as e:
-            pass
+            st.sidebar.error(f"❌ שגיאה בשליחה ל-{topic}: {e}")
             
-    time.sleep(1)
+    time.sleep(1.5)
     my_bar.empty()
     return count
 
@@ -155,25 +160,23 @@ with st.sidebar:
 
     st.divider()
     if st.button("🔄 למחזור דיווח חדש"):
-        # 1. איפוס בזיכרון
+        # איפוס בזיכרון המקומי קודם
         st.session_state.master_df['נוכח'] = False
         st.session_state.master_df['זמן דיווח'] = ""
         
-        # 2. שמירה לענן
+        # שמירה לענן
         save_changes_to_cloud(st.session_state.master_df)
         
-        # 3. זיהוי פעילים - לוגיקה משופרת
-        # אנחנו מוודאים ש-Pandas מזהה את ה-True/False נכון
-        df_to_check = st.session_state.master_df.copy()
-        active_soldiers = df_to_check[df_to_check['פעיל'] == True]
+        # זיהוי פעילים - וידוא המרה לבוליאני
+        df_temp = st.session_state.master_df.copy()
+        active_soldiers = df_temp[df_temp['פעיל'] == True]
         
-        # 4. שליחה
         count = send_push(active_soldiers)
         
         if count > 0:
             st.success(f"המחזור אופס ונשלחו {count} התראות!")
         else:
-            st.warning(f"המחזור אופס, אך נשלחו 0 התראות. (נמצאו {len(active_soldiers)} פעילים במערכת)")
+            st.warning(f"אופס, אך נשלחו 0 התראות. נמצאו {len(active_soldiers)} פעילים.")
             
         time.sleep(2)
         st.rerun()
@@ -213,7 +216,8 @@ if not df.empty:
     else:
         frame_mask = (df['מסגרת'] == selected_frame) & (df['פעיל'] == True)
         
-    display_df = df.loc[frame_mask, ['נוכח', 'פעיל', 'שם מלא', 'מספר אישי', 'מפקד']].copy()
+    original_display_df = df.loc[frame_mask, ['נוכח', 'פעיל', 'שם מלא', 'מספר אישי', 'מפקד']].copy()
+    display_df = original_display_df.copy()
     
     select_all_key = f"select_all_{selected_frame}"
     if not st.session_state.show_inactive_view:
@@ -233,7 +237,7 @@ if not df.empty:
         use_container_width=True
     )
 
-    if not edited_df.equals(display_df):
+    if not edited_df.equals(original_display_df):
         if st.button("💾 שמור נתונים", type="primary", use_container_width=True):
             current_time = datetime.now().strftime("%H:%M")
             for _, row in edited_df.iterrows():
