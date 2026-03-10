@@ -63,16 +63,17 @@ def load_data_from_cloud():
             except: return str(val)
             
         if 'מסגרת' in df.columns: df['מסגרת'] = df['מסגרת'].apply(clean_frame)
+        
+        # ניקוי מספר אישי - קריטי להתראות
         if 'מספר אישי' in df.columns: 
             df['מספר אישי'] = df['מספר אישי'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
             
         for col in ['נוכח', 'זמן דיווח', 'פעיל', 'מפקד']:
             if col not in df.columns: df[col] = "" 
             
-        # תיקון כאן: המרה גמישה יותר. כל מה שלא מוגדר כ-False/0/לא ייחשב כ-True.
-        invalid_vals = ['false', '0', 'no', 'לא', 'false.0', 'nan', '']
-        df['נוכח'] = df['נוכח'].astype(str).str.strip().str.lower().apply(lambda x: x not in invalid_vals and x != 'none')
-        df['פעיל'] = df['פעיל'].astype(str).str.strip().str.lower().apply(lambda x: x not in invalid_vals and x != 'none')
+        invalid_vals = ['false', '0', 'no', 'לא', 'false.0', 'nan', '', 'none']
+        df['נוכח'] = df['נוכח'].astype(str).str.strip().str.lower().apply(lambda x: x not in invalid_vals)
+        df['פעיל'] = df['פעיל'].astype(str).str.strip().str.lower().apply(lambda x: x not in invalid_vals)
         
         return df
     except Exception as e:
@@ -100,13 +101,16 @@ def send_push(active_df):
     my_bar = st.progress(0, text="שולח התראות לניידים...")
     
     for index, row in active_df.iterrows():
-        mi = str(row['מספר אישי']).strip()
-        if not mi or mi == "nan" or mi == "":
+        # המרה בטוחה של מספר אישי לטקסט נקי
+        mi = str(row['מספר אישי']).split('.')[0].strip()
+        
+        if not mi or mi == "nan" or mi == "" or mi == "None":
             continue
             
         try:
             # שליחה לחדר toto_ עם המספר האישי
-            res = requests.post(f"https://ntfy.sh/toto_{mi}", 
+            topic = f"toto_{mi}"
+            res = requests.post(f"https://ntfy.sh/{topic}", 
                 data="בוקר טוב! נפתח דיווח נוכחות גרביל. לחץ כאן למילוי.",
                 headers={
                     "Title": "🇮🇱 נוכחות גרביל",
@@ -151,18 +155,25 @@ with st.sidebar:
 
     st.divider()
     if st.button("🔄 למחזור דיווח חדש"):
+        # 1. איפוס בזיכרון
         st.session_state.master_df['נוכח'] = False
         st.session_state.master_df['זמן דיווח'] = ""
+        
+        # 2. שמירה לענן
         save_changes_to_cloud(st.session_state.master_df)
         
-        # סינון פעילים
-        active_soldiers = st.session_state.master_df[st.session_state.master_df['פעיל'] == True]
+        # 3. זיהוי פעילים - לוגיקה משופרת
+        # אנחנו מוודאים ש-Pandas מזהה את ה-True/False נכון
+        df_to_check = st.session_state.master_df.copy()
+        active_soldiers = df_to_check[df_to_check['פעיל'] == True]
+        
+        # 4. שליחה
         count = send_push(active_soldiers)
         
         if count > 0:
             st.success(f"המחזור אופס ונשלחו {count} התראות!")
         else:
-            st.warning("המחזור אופס, אך לא נשלחו התראות.")
+            st.warning(f"המחזור אופס, אך נשלחו 0 התראות. (נמצאו {len(active_soldiers)} פעילים במערכת)")
             
         time.sleep(2)
         st.rerun()
