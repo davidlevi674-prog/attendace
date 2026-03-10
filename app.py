@@ -6,11 +6,12 @@ import requests
 import time
 import os
 
-# --- 1. הגדרות ועיצוב ---
+# --- 1. הגדרות ועיצוב (מותאם לסמארטפון) ---
 st.set_page_config(page_title="בדיקת נוכחות גרביל", layout="wide", page_icon="logo.png")
 
 st.markdown("""
     <style>
+    /* הגדרות כלליות וכיווניות */
     .stApp { background-color: #4B5320; color: white; direction: rtl; text-align: right; }
     [data-testid="stSidebar"] { background-color: #3b4218 !important; }
     div[data-testid="stText"], div[data-testid="stMarkdownContainer"] { text-align: right; direction: rtl; }
@@ -18,16 +19,24 @@ st.markdown("""
     div[data-baseweb="input"] input { color: black !important; }
     div[data-baseweb="select"] span { color: black !important; }
     
-    /* עיצוב כפתורים רגילים (זהב) */
+    /* התאמה לסמארטפון - צמצום רווחים */
+    @media (max-width: 640px) {
+        .main .block-container { padding: 1rem 0.5rem !important; }
+        h1 { font-size: 1.5rem !important; }
+        div.stButton > button { width: 100% !important; margin-bottom: 5px; }
+    }
+
+    /* עיצוב כפתורים זהב */
     div.stButton > button { 
         background-color: #D4AF37 !important; 
         border-radius: 10px !important; 
         border: none !important; 
         color: black !important;
         font-weight: bold !important;
+        height: 3em;
     }
     
-    /* עיצוב ספציפי לכפתור מחיקה (אדום) */
+    /* כפתור מחיקה אדום */
     .stButton button[kind="primary"] {
         background-color: #ff4b4b !important;
         color: white !important;
@@ -40,7 +49,7 @@ st.markdown("""
 col1, col2, col3 = st.columns([1,1,1])
 with col2:
     if os.path.exists("logo.png"):
-        st.image("logo.png", width=150)
+        st.image("logo.png", width=120)
     else:
         st.markdown("<h2 style='text-align: center;'>🇮🇱</h2>", unsafe_allow_html=True)
 
@@ -130,13 +139,19 @@ def send_push(active_df):
     my_bar.empty()
     return count
 
-# --- 3. ה"מוח" המקומי ---
+# --- 3. ניהול מצב ---
 if "master_df" not in st.session_state:
     st.session_state.master_df = load_data_from_cloud()
 
 with st.sidebar:
     st.header("⚙️ מנהל")
     
+    # כפתור רענן נתונים (הוחזר)
+    if st.button("🔄 רענן נתונים"):
+        st.cache_data.clear()
+        st.session_state.master_df = load_data_from_cloud()
+        st.rerun()
+
     # הוספת חייל חדש
     with st.expander("➕ הוספת חייל חדש"):
         n_name = st.text_input("שם מלא:")
@@ -158,7 +173,7 @@ with st.sidebar:
     # מחיקת חייל לצמיתות
     with st.expander("🗑️ מחיקת חייל לצמיתות"):
         del_mi = st.text_input("מספר אישי למחיקה:")
-        if st.button("מחק חייל", type="primary"): # שיניתי ל-type=primary שיהיה אדום לפי ה-CSS
+        if st.button("מחק חייל", type="primary"):
             if del_mi:
                 idx_list = st.session_state.master_df.index[st.session_state.master_df['מספר אישי'] == del_mi.strip()].tolist()
                 if idx_list:
@@ -167,8 +182,6 @@ with st.sidebar:
                     st.success("החייל נמחק!")
                     time.sleep(1)
                     st.rerun()
-                else:
-                    st.error("לא נמצא.")
 
     st.divider()
     if st.button("🔄 למחזור דיווח חדש"):
@@ -190,17 +203,18 @@ if not df.empty:
     total_active = len(df[active_mask])
     
     st.progress(total_present / total_active if total_active > 0 else 0, 
-                text=f"סה''כ נוכחים: {total_present} מתוך {total_active} פעילים")
+                text=f"נוכחים: {total_present}/{total_active}")
 
     st.divider()
 
     frames = sorted(df['מסגרת'].unique().tolist())
-    selected_frame = st.selectbox("בחר מחלקה לצפייה וסימון:", frames)
+    selected_frame = st.selectbox("בחר מחלקה:", frames)
     
     if 'show_inactive_view' not in st.session_state:
         st.session_state.show_inactive_view = False
         
-    if st.button("👁️ חזור לרשימת פעילים" if st.session_state.show_inactive_view else "👁️ רשימת לא פעילים"):
+    btn_label = "👁️ רשימת פעילים" if st.session_state.show_inactive_view else "👁️ רשימת לא פעילים"
+    if st.button(btn_label):
         st.session_state.show_inactive_view = not st.session_state.show_inactive_view
         st.rerun()
         
@@ -211,18 +225,19 @@ if not df.empty:
     display_df = original_display_df.copy()
     
     if is_active_view:
-        if st.checkbox(f"✅ סמן את כל מחלקה {selected_frame} כנוכחים", key=f"all_p_{selected_frame}"):
+        if st.checkbox(f"✅ סמן הכל כנוכחים ({selected_frame})", key=f"all_p_{selected_frame}"):
             display_df['נוכח'] = True
     else:
-        if st.checkbox(f"✅ סמן את כל מחלקה {selected_frame} כפעילים", key=f"all_a_{selected_frame}"):
+        if st.checkbox(f"✅ סמן הכל כפעילים ({selected_frame})", key=f"all_a_{selected_frame}"):
             display_df['פעיל'] = True
 
     editor_key = f"ed_{selected_frame}_{st.session_state.show_inactive_view}"
     edited_df = st.data_editor(
         display_df,
         column_config={
-            "נוכח": st.column_config.CheckboxColumn("🟢 נמצא?", default=False),
-            "פעיל": st.column_config.CheckboxColumn("פעיל?", default=True),
+            "נוכח": st.column_config.CheckboxColumn("🟢", default=False),
+            "פעיל": st.column_config.CheckboxColumn("פעיל", default=True),
+            "שם מלא": st.column_config.TextColumn("שם"),
         },
         disabled=["שם מלא", "מספר אישי", "מפקד"],
         hide_index=True,
@@ -231,7 +246,7 @@ if not df.empty:
     )
 
     if not edited_df.equals(original_display_df):
-        if st.button("💾 שמור נתונים", use_container_width=True):
+        if st.button("💾 שמור שינויים", use_container_width=True):
             current_time = datetime.now().strftime("%H:%M")
             for _, row in edited_df.iterrows():
                 mi = row['מספר אישי']
@@ -245,8 +260,8 @@ if not df.empty:
                         st.session_state.master_df.at[idx, 'זמן דיווח'] = current_time
             
             save_changes_to_cloud(st.session_state.master_df)
-            st.success("נשמר!")
+            st.success("הנתונים סונכרנו!")
             time.sleep(0.5)
             st.rerun()
 else:
-    st.warning("לא נמצאו נתונים בגיליון.")
+    st.warning("לא נמצאו נתונים.")
