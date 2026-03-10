@@ -55,10 +55,7 @@ def run_with_retry(func, retries=3, delay=2):
 def load_data_from_cloud():
     try:
         df = run_with_retry(lambda: conn.read(worksheet="Sheet1", ttl=0))
-        # ניקוי שמות עמודות מרווחים נסתרים
         df.columns = [str(c).strip() for c in df.columns]
-        
-        st.sidebar.write(f"📊 נמצאו {len(df)} שורות בגוגל שיטס")
         
         def clean_frame(val):
             if pd.isna(val): return "ללא מחלקה"
@@ -72,12 +69,9 @@ def load_data_from_cloud():
         for col in ['נוכח', 'זמן דיווח', 'פעיל', 'מפקד']:
             if col not in df.columns: df[col] = "" 
             
-        # המרה סלחנית מאוד רק לצורך הבדיקה למה זה לא חוזר
         valid_true = ['true', '1', 'v', 'yes', 'כן', 'true.0', 't']
         df['נוכח'] = df['נוכח'].astype(str).str.strip().str.lower().isin(valid_true)
         df['פעיל'] = df['פעיל'].astype(str).str.strip().str.lower().isin(valid_true)
-        
-        st.sidebar.write(f"✅ מתוכן {len(df[df['פעיל'] == True])} מסומנות כפעילות")
         
         return df
     except Exception as e:
@@ -122,8 +116,7 @@ def send_push(active_df):
             )
             count += 1
             my_bar.progress(count / total)
-        except Exception as e:
-            pass
+        except: pass
             
     time.sleep(1)
     my_bar.empty()
@@ -174,16 +167,19 @@ if not df.empty:
         st.session_state.show_inactive_view = not st.session_state.show_inactive_view
         st.rerun()
         
-    # סינון התצוגה
     is_active_view = not st.session_state.show_inactive_view
     frame_mask = (df['מסגרת'] == selected_frame) & (df['פעיל'] == is_active_view)
     
     original_display_df = df.loc[frame_mask, ['נוכח', 'פעיל', 'שם מלא', 'מספר אישי', 'מפקד']].copy()
     display_df = original_display_df.copy()
     
+    # --- הוספת צ'קבוקס "סמן הכל" דינמי ---
     if is_active_view:
-        if st.checkbox(f"✅ סמן את כל מחלקה {selected_frame} כנוכחים", key=f"all_{selected_frame}"):
+        if st.checkbox(f"✅ סמן את כל מחלקה {selected_frame} כנוכחים", key=f"all_p_{selected_frame}"):
             display_df['נוכח'] = True
+    else:
+        if st.checkbox(f"✅ סמן את כל מחלקה {selected_frame} כפעילים", key=f"all_a_{selected_frame}"):
+            display_df['פעיל'] = True
 
     editor_key = f"ed_{selected_frame}_{st.session_state.show_inactive_view}"
     edited_df = st.data_editor(
@@ -217,4 +213,4 @@ if not df.empty:
             time.sleep(0.5)
             st.rerun()
 else:
-    st.warning("לא נמצאו נתונים בגיליון. וודא שהגיליון אינו ריק ושיש עמודות בשם: שם מלא, מסגרת, מספר אישי, נוכח, פעיל.")
+    st.warning("לא נמצאו נתונים בגיליון.")
