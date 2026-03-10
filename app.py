@@ -29,11 +29,10 @@ with col2:
 
 st.title("בדיקת נוכחות גרביל")
 
-# --- 2. מנגנון חיבור חכם ---
+# --- 2. מנגנון חיבור חכם ועוקף-באגים ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def run_with_retry(func, retries=3, delay=2):
-    """מנגנון ניסיון חוזר למניעת קריסות מול גוגל"""
     for i in range(retries):
         try:
             return func()
@@ -44,10 +43,16 @@ def run_with_retry(func, retries=3, delay=2):
                     continue
             raise e
 
+# כספת הזיכרון החדשה שלנו (בשליטה מלאה שלנו)
+@st.cache_data(ttl=10, show_spinner=False)
+def fetch_master_data():
+    # ttl=0 מונע מגוגל לאגור נתונים על דעת עצמו
+    raw_df = run_with_retry(lambda: conn.read(worksheet="Sheet1", ttl=0))
+    return raw_df
+
 def load_data_from_cloud():
-    """טוען נתונים מהענן עם המרה חסינה לשגיאות"""
     try:
-        df = run_with_retry(lambda: conn.read(worksheet="Sheet1", ttl=5))
+        df = fetch_master_data().copy()
         df.columns = df.columns.str.strip()
         
         def clean_frame(val):
@@ -62,7 +67,6 @@ def load_data_from_cloud():
         for col in ['נוכח', 'זמן דיווח', 'פעיל', 'מפקד']:
             if col not in df.columns: df[col] = "" 
             
-        # המרה קפדנית ובטוחה של בוליאנים
         valid_true = ['true', '1', 'v', 'yes', 'כן', 'true.0']
         df['נוכח'] = df['נוכח'].astype(str).str.strip().str.lower().isin(valid_true)
         
@@ -75,13 +79,9 @@ def load_data_from_cloud():
         return pd.DataFrame()
 
 def save_changes_to_cloud(df_to_save):
-    """שומר לענן בפורמט שגוגל מבין בוודאות"""
     df_copy = df_to_save.copy()
-    
-    # המרה לטקסט מפורש כדי שגוגל שיטס לא יתבלבל בין פורמטים
     df_copy['נוכח'] = df_copy['נוכח'].apply(lambda x: 'TRUE' if x else 'FALSE')
     df_copy['פעיל'] = df_copy['פעיל'].apply(lambda x: 'TRUE' if x else 'FALSE')
-    
     try:
         run_with_retry(lambda: conn.update(worksheet="Sheet1", data=df_copy))
     except Exception as e:
@@ -107,17 +107,16 @@ def send_push(active_df):
 
 # --- 4. לוגיקה ראשית ---
 
-# טעינה מהענן (או מהמטמון)
 df = load_data_from_cloud()
 original_df = df.copy()
 
 col_ref, col_info = st.columns([1, 4])
 with col_ref:
     if st.button("🔄 רענן נתונים"):
-        st.cache_data.clear() # כופה משיכה טרייה מגוגל
+        fetch_master_data.clear() # השמדה מוחלטת של הזיכרון במשיכה
         st.rerun()
 
-# --- חישוב סטטיסטיקה (מתעדכן מיד לאחר ריענון) ---
+# --- חישוב סטטיסטיקה (עכשיו יתעדכן מיד!) ---
 active_mask = df['פעיל'] == True
 total_present = len(df[active_mask & (df['נוכח'] == True)])
 total_active = len(df[active_mask])
@@ -135,10 +134,10 @@ if not df.empty:
     frame_mask = (df['מסגרת'] == selected_frame) & (df['פעיל'] == True)
     display_df = df.loc[frame_mask, ['נוכח', 'שם מלא', 'מספר אישי', 'מפקד']].copy()
     
-    # --- הפתרון המבוקש: צ'קבוקס "סמן הכל" מעל הטבלה ---
+    # --- הצ'קבוקס שביקשת ---
     select_all_key = f"select_all_{selected_frame}"
     if st.checkbox(f"✅ סמן את כל מחלקה {selected_frame}", key=select_all_key):
-        display_df['נוכח'] = True # מדליק הכל לפני הצגת הטבלה
+        display_df['נוכח'] = True 
         
     editor_key = f"editor_{selected_frame}"
     edited_df = st.data_editor(
@@ -151,11 +150,10 @@ if not df.empty:
         },
         disabled=["שם מלא", "מספר אישי", "מפקד"],
         hide_index=True,
-        key=editor_key, # מפתח ייחודי לכל מחלקה! מונע מחיקת זיכרון במעבר
+        key=editor_key,
         use_container_width=True
     )
 
-    # --- מנגנון השמירה ---
     original_frame_df = original_df.loc[frame_mask, ['נוכח', 'שם מלא', 'מספר אישי', 'מפקד']]
     
     if not edited_df.equals(original_frame_df):
@@ -165,29 +163,26 @@ if not df.empty:
             df.update(edited_df)
             current_time = datetime.now().strftime("%H:%M")
             
-            # עדכון זמני הגעה רק לאלו שסימנו אותם עכשיו
             for idx in edited_df.index:
                 old_val = original_df.loc[idx, 'נוכח']
                 new_val = edited_df.loc[idx, 'נוכח']
                 if new_val == True and old_val == False:
                     df.at[idx, 'זמן דיווח'] = current_time
             
-            with st.spinner('שולח נתונים לגוגל...'):
+            with st.spinner('מעדכן נתונים...'):
                 save_changes_to_cloud(df)
                 
-                # התיקון הקריטי: מחיקת כל זיכרון ישן כדי להכריח את האפליקציה למשוך את החדש
-                st.cache_data.clear()
+                # --- החלק הקריטי: טיפול בבעיית הסנכרון ---
+                time.sleep(1.5) # נותנים לשרתי גוגל להתאפס על עצמם
+                fetch_master_data.clear() # משמידים את הזיכרון הישן!
                 
-                # מחיקת הזיכרון של הצ'קבוקס העליון (התיקון לשגיאה שחווית)
-                if select_all_key in st.session_state:
-                    del st.session_state[select_all_key] 
-                
-                # מחיקת הזיכרון של העורך
-                if editor_key in st.session_state:
-                    del st.session_state[editor_key] 
+                # משמידים את זכרון המסך כדי שלא ישחזר מידע מיושן
+                for key in list(st.session_state.keys()):
+                    if key.startswith("editor_") or key.startswith("select_all_"):
+                        del st.session_state[key]
                 
                 st.success("הנתונים נשמרו בהצלחה!")
-                time.sleep(1)
+                time.sleep(0.5)
                 st.rerun()
 
 # --- כפתורי ניהול בסרגל צד ---
@@ -196,16 +191,18 @@ with st.sidebar:
     if st.button("🔄 התחל יום חדש + שלח התראות"):
         df['נוכח'] = False
         df['זמן דיווח'] = ""
-        save_changes_to_cloud(df)
-        st.cache_data.clear()
         
-        # ניקוי העורכים כדי שיראו מסך נקי
-        for key in list(st.session_state.keys()):
-            if key.startswith("editor_") or key.startswith("select_all_"):
-                del st.session_state[key]
-                
-        active_soldiers = df[df['פעיל'] == True]
-        count = send_push(active_soldiers)
-        st.success(f"נשלחו {count} התראות. יום חדש התחיל!")
-        time.sleep(2)
-        st.rerun()
+        with st.spinner("מאפס יום חדש..."):
+            save_changes_to_cloud(df)
+            time.sleep(1.5)
+            fetch_master_data.clear()
+            
+            for key in list(st.session_state.keys()):
+                if key.startswith("editor_") or key.startswith("select_all_"):
+                    del st.session_state[key]
+                    
+            active_soldiers = df[df['פעיל'] == True]
+            count = send_push(active_soldiers)
+            st.success(f"נשלחו {count} התראות. יום חדש התחיל!")
+            time.sleep(2)
+            st.rerun()
