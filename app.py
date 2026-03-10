@@ -69,10 +69,10 @@ def load_data_from_cloud():
         for col in ['נוכח', 'זמן דיווח', 'פעיל', 'מפקד']:
             if col not in df.columns: df[col] = "" 
             
-        # המרה בטוחה לבוליאני
-        valid_true = ['true', '1', 'v', 'yes', 'כן', 'true.0']
-        df['נוכח'] = df['נוכח'].astype(str).str.strip().str.lower().isin(valid_true)
-        df['פעיל'] = df['פעיל'].astype(str).str.strip().str.lower().isin(valid_true)
+        # תיקון כאן: המרה גמישה יותר. כל מה שלא מוגדר כ-False/0/לא ייחשב כ-True.
+        invalid_vals = ['false', '0', 'no', 'לא', 'false.0', 'nan', '']
+        df['נוכח'] = df['נוכח'].astype(str).str.strip().str.lower().apply(lambda x: x not in invalid_vals and x != 'none')
+        df['פעיל'] = df['פעיל'].astype(str).str.strip().str.lower().apply(lambda x: x not in invalid_vals and x != 'none')
         
         return df
     except Exception as e:
@@ -85,6 +85,7 @@ def save_changes_to_cloud(df_to_save):
     df_copy['פעיל'] = df_copy['פעיל'].apply(lambda x: 'TRUE' if x else 'FALSE')
     try:
         run_with_retry(lambda: conn.update(worksheet="Sheet1", data=df_copy))
+        st.cache_data.clear()
     except Exception as e:
         st.warning(f"שגיאת שמירה זמנית: {e}")
 
@@ -100,7 +101,6 @@ def send_push(active_df):
     
     for index, row in active_df.iterrows():
         mi = str(row['מספר אישי']).strip()
-        # וידוא שהמספר האישי לא ריק
         if not mi or mi == "nan" or mi == "":
             continue
             
@@ -120,7 +120,7 @@ def send_push(active_df):
                 count += 1
             my_bar.progress(count / total)
         except Exception as e:
-            st.sidebar.error(f"שגיאה בשליחה ל-{row['שם מלא']}: {e}")
+            pass
             
     time.sleep(1)
     my_bar.empty()
@@ -151,24 +151,18 @@ with st.sidebar:
 
     st.divider()
     if st.button("🔄 למחזור דיווח חדש"):
-        # איפוס מקומי
         st.session_state.master_df['נוכח'] = False
         st.session_state.master_df['זמן דיווח'] = ""
-        
-        # שמירה לענן
         save_changes_to_cloud(st.session_state.master_df)
         
-        # סינון חיילים פעילים בלבד למשלוח
-        # שימוש ב-astype(bool) ליתר ביטחון
-        df_all = st.session_state.master_df
-        active_soldiers = df_all[df_all['פעיל'] == True]
-        
+        # סינון פעילים
+        active_soldiers = st.session_state.master_df[st.session_state.master_df['פעיל'] == True]
         count = send_push(active_soldiers)
         
         if count > 0:
             st.success(f"המחזור אופס ונשלחו {count} התראות!")
         else:
-            st.warning("המחזור אופס, אך לא נשלחו התראות (לא נמצאו חיילים פעילים עם מספר אישי תקין).")
+            st.warning("המחזור אופס, אך לא נשלחו התראות.")
             
         time.sleep(2)
         st.rerun()
@@ -208,8 +202,7 @@ if not df.empty:
     else:
         frame_mask = (df['מסגרת'] == selected_frame) & (df['פעיל'] == True)
         
-    original_display_df = df.loc[frame_mask, ['נוכח', 'פעיל', 'שם מלא', 'מספר אישי', 'מפקד']].copy()
-    display_df = original_display_df.copy()
+    display_df = df.loc[frame_mask, ['נוכח', 'פעיל', 'שם מלא', 'מספר אישי', 'מפקד']].copy()
     
     select_all_key = f"select_all_{selected_frame}"
     if not st.session_state.show_inactive_view:
@@ -229,7 +222,7 @@ if not df.empty:
         use_container_width=True
     )
 
-    if not edited_df.equals(display_df) or not edited_df.equals(original_display_df):
+    if not edited_df.equals(display_df):
         if st.button("💾 שמור נתונים", type="primary", use_container_width=True):
             current_time = datetime.now().strftime("%H:%M")
             for _, row in edited_df.iterrows():
