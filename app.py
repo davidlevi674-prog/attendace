@@ -55,7 +55,10 @@ def run_with_retry(func, retries=3, delay=2):
 def load_data_from_cloud():
     try:
         df = run_with_retry(lambda: conn.read(worksheet="Sheet1", ttl=0))
-        df.columns = df.columns.str.strip()
+        # ניקוי שמות עמודות מרווחים נסתרים
+        df.columns = [str(c).strip() for c in df.columns]
+        
+        st.sidebar.write(f"📊 נמצאו {len(df)} שורות בגוגל שיטס")
         
         def clean_frame(val):
             if pd.isna(val): return "ללא מחלקה"
@@ -69,10 +72,12 @@ def load_data_from_cloud():
         for col in ['נוכח', 'זמן דיווח', 'פעיל', 'מפקד']:
             if col not in df.columns: df[col] = "" 
             
-        # המרה בטוחה: מנקה רווחים והופך לקטן לפני הבדיקה
-        valid_true = ['true', '1', 'v', 'yes', 'כן', 'true.0']
+        # המרה סלחנית מאוד רק לצורך הבדיקה למה זה לא חוזר
+        valid_true = ['true', '1', 'v', 'yes', 'כן', 'true.0', 't']
         df['נוכח'] = df['נוכח'].astype(str).str.strip().str.lower().isin(valid_true)
         df['פעיל'] = df['פעיל'].astype(str).str.strip().str.lower().isin(valid_true)
+        
+        st.sidebar.write(f"✅ מתוכן {len(df[df['פעיל'] == True])} מסומנות כפעילות")
         
         return df
     except Exception as e:
@@ -103,7 +108,6 @@ def send_push(active_df):
             
         topic = f"toto_{mi}"
         try:
-            # תיקון קידוד עברית ב-Headers
             requests.post(
                 f"https://ntfy.sh/{topic}", 
                 data="Attendance Check is open".encode('utf-8'),
@@ -119,7 +123,7 @@ def send_push(active_df):
             count += 1
             my_bar.progress(count / total)
         except Exception as e:
-            st.sidebar.error(f"שגיאה ב-{mi}: {e}")
+            pass
             
     time.sleep(1)
     my_bar.empty()
@@ -131,22 +135,10 @@ if "master_df" not in st.session_state:
 
 with st.sidebar:
     st.header("⚙️ מנהל")
-    with st.expander("➕ הוספת חייל חדש"):
-        n_name = st.text_input("שם מלא:")
-        n_mi = st.text_input("מספר אישי:")
-        frames_list = sorted(st.session_state.master_df['מסגרת'].unique().tolist()) if not st.session_state.master_df.empty else ["1"]
-        n_frame = st.selectbox("מסגרת (מחלקה):", frames_list)
-        n_is_comm = st.checkbox("מפקד?")
-        if st.button("הוסף לרשימה"):
-            if n_name and n_mi:
-                new_row = pd.DataFrame([{
-                    "שם מלא": n_name, "מסגרת": str(n_frame), "מספר אישי": str(n_mi).strip(), 
-                    "מפקד": n_is_comm, "נוכח": False, "זמן דיווח": "", "פעיל": True
-                }])
-                st.session_state.master_df = pd.concat([st.session_state.master_df, new_row], ignore_index=True)
-                save_changes_to_cloud(st.session_state.master_df)
-                st.success("החייל הוסף!")
-                st.rerun()
+    if st.button("🔄 רענן נתונים"):
+        st.cache_data.clear()
+        st.session_state.master_df = load_data_from_cloud()
+        st.rerun()
 
     st.divider()
     if st.button("🔄 למחזור דיווח חדש"):
@@ -160,25 +152,18 @@ with st.sidebar:
         st.rerun()
 
 # --- 4. לוגיקה ראשית ---
-col_ref, col_info = st.columns([1, 4])
-with col_ref:
-    if st.button("🔄 רענן נתונים"):
-        st.cache_data.clear()
-        st.session_state.master_df = load_data_from_cloud()
-        st.rerun()
-
 df = st.session_state.master_df
-active_mask = (df['פעיל'] == True)
-total_present = len(df[active_mask & (df['נוכח'] == True)])
-total_active = len(df[active_mask])
 
-with col_info:
+if not df.empty:
+    active_mask = (df['פעיל'] == True)
+    total_present = len(df[active_mask & (df['נוכח'] == True)])
+    total_active = len(df[active_mask])
+    
     st.progress(total_present / total_active if total_active > 0 else 0, 
                 text=f"סה''כ נוכחים: {total_present} מתוך {total_active} פעילים")
 
-st.divider()
+    st.divider()
 
-if not df.empty:
     frames = sorted(df['מסגרת'].unique().tolist())
     selected_frame = st.selectbox("בחר מחלקה לצפייה וסימון:", frames)
     
@@ -189,13 +174,14 @@ if not df.empty:
         st.session_state.show_inactive_view = not st.session_state.show_inactive_view
         st.rerun()
         
-    frame_mask = (df['מסגרת'] == selected_frame) & (df['פעיל'] == (not st.session_state.show_inactive_view))
+    # סינון התצוגה
+    is_active_view = not st.session_state.show_inactive_view
+    frame_mask = (df['מסגרת'] == selected_frame) & (df['פעיל'] == is_active_view)
     
-    # השוואה למקור לפני ה-Checkbox לצורך כפתור השמירה
     original_display_df = df.loc[frame_mask, ['נוכח', 'פעיל', 'שם מלא', 'מספר אישי', 'מפקד']].copy()
     display_df = original_display_df.copy()
     
-    if not st.session_state.show_inactive_view:
+    if is_active_view:
         if st.checkbox(f"✅ סמן את כל מחלקה {selected_frame} כנוכחים", key=f"all_{selected_frame}"):
             display_df['נוכח'] = True
 
@@ -230,3 +216,5 @@ if not df.empty:
             st.success("נשמר!")
             time.sleep(0.5)
             st.rerun()
+else:
+    st.warning("לא נמצאו נתונים בגיליון. וודא שהגיליון אינו ריק ושיש עמודות בשם: שם מלא, מסגרת, מספר אישי, נוכח, פעיל.")
