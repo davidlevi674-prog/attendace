@@ -17,19 +17,22 @@ st.markdown("""
     h1, h2, h3, h4, span, label, p { color: white !important; }
     div[data-baseweb="input"] input { color: black !important; }
     div[data-baseweb="select"] span { color: black !important; }
+    
+    /* עיצוב כפתורים רגילים (זהב) */
     div.stButton > button { 
         background-color: #D4AF37 !important; 
         border-radius: 10px !important; 
         border: none !important; 
+        color: black !important;
+        font-weight: bold !important;
     }
-    div.stButton > button p, div.stButton > button span { 
-        color: black !important; font-weight: bold !important; 
-    }
-    /* עיצוב כפתור מחיקה אדום */
-    .stButton button[kind="secondary"] {
+    
+    /* עיצוב ספציפי לכפתור מחיקה (אדום) */
+    .stButton button[kind="primary"] {
         background-color: #ff4b4b !important;
         color: white !important;
     }
+    
     div[data-testid="stDataEditor"] { direction: rtl; }
     </style>
     """, unsafe_allow_html=True)
@@ -137,38 +140,35 @@ with st.sidebar:
     # הוספת חייל חדש
     with st.expander("➕ הוספת חייל חדש"):
         n_name = st.text_input("שם מלא:")
-        n_mi = st.text_input("מספר אישי (להוספה):")
+        n_mi_input = st.text_input("מספר אישי (להוספה):")
         frames_list = sorted(st.session_state.master_df['מסגרת'].unique().tolist()) if not st.session_state.master_df.empty else ["1"]
         n_frame = st.selectbox("מסגרת (מחלקה):", frames_list)
         n_is_comm = st.checkbox("מפקד?")
         if st.button("הוסף לרשימה"):
-            if n_name and n_mi:
+            if n_name and n_mi_input:
                 new_row = pd.DataFrame([{
-                    "שם מלא": n_name, "מסגרת": str(n_frame), "מספר אישי": str(n_mi).strip(), 
+                    "שם מלא": n_name, "מסגרת": str(n_frame), "מספר אישי": str(n_mi_input).strip(), 
                     "מפקד": n_is_comm, "נוכח": False, "זמן דיווח": "", "פעיל": True
                 }])
                 st.session_state.master_df = pd.concat([st.session_state.master_df, new_row], ignore_index=True)
                 save_changes_to_cloud(st.session_state.master_df)
                 st.success("החייל הוסף!")
                 st.rerun()
-            else:
-                st.warning("נא למלא שם ומספר אישי.")
 
     # מחיקת חייל לצמיתות
     with st.expander("🗑️ מחיקת חייל לצמיתות"):
-        st.write("פעולה זו תמחק את החייל גם מגוגל שיטס!")
-        del_mi = st.text_input("הזן מספר אישי למחיקה:")
-        if st.button("מחק חייל לצמיתות", kind="secondary"):
+        del_mi = st.text_input("מספר אישי למחיקה:")
+        if st.button("מחק חייל", type="primary"): # שיניתי ל-type=primary שיהיה אדום לפי ה-CSS
             if del_mi:
                 idx_list = st.session_state.master_df.index[st.session_state.master_df['מספר אישי'] == del_mi.strip()].tolist()
                 if idx_list:
                     st.session_state.master_df = st.session_state.master_df.drop(idx_list)
                     save_changes_to_cloud(st.session_state.master_df)
-                    st.success("החייל נמחק בהצלחה!")
+                    st.success("החייל נמחק!")
                     time.sleep(1)
                     st.rerun()
                 else:
-                    st.error("מספר אישי לא נמצא.")
+                    st.error("לא נמצא.")
 
     st.divider()
     if st.button("🔄 למחזור דיווח חדש"):
@@ -231,7 +231,7 @@ if not df.empty:
     )
 
     if not edited_df.equals(original_display_df):
-        if st.button("💾 שמור נתונים", type="primary", use_container_width=True):
+        if st.button("💾 שמור נתונים", use_container_width=True):
             current_time = datetime.now().strftime("%H:%M")
             for _, row in edited_df.iterrows():
                 mi = row['מספר אישי']
