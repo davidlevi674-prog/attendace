@@ -178,11 +178,13 @@ if not df.empty:
                 # התיקון הקריטי: מחיקת כל זיכרון ישן כדי להכריח את האפליקציה למשוך את החדש
                 st.cache_data.clear()
                 
+                # מחיקת הזיכרון של הצ'קבוקס העליון (התיקון לשגיאה שחווית)
                 if select_all_key in st.session_state:
-                    st.session_state[select_all_key] = False # מכבה את הצ'קבוקס העליון חזרה
+                    del st.session_state[select_all_key] 
                 
+                # מחיקת הזיכרון של העורך
                 if editor_key in st.session_state:
-                    del st.session_state[editor_key] # מנקה את העורך
+                    del st.session_state[editor_key] 
                 
                 st.success("הנתונים נשמרו בהצלחה!")
                 time.sleep(1)
