@@ -86,5 +86,11 @@ def load_data_from_cloud():
 
 def save_changes_to_cloud(df_to_save):
     df_copy = df_to_save.copy()
-    df_copy['נוכח'] = df_copy['נוכח'].apply(lambda x: 'TRUE' if x else 'FALSE'
+    df_copy['נוכח'] = df_copy['נוכח'].apply(lambda x: 'TRUE' if x else 'FALSE')
+    df_copy['פעיל'] = df_copy['פעיל'].apply(lambda x: 'TRUE' if x else 'FALSE')
+    try:
+        run_with_retry(lambda: conn.update(worksheet="Sheet1", data=df_copy))
+    except Exception as e:
+        st.warning(f"שגיאת שמירה זמנית (עומס): {e}")
+
 
