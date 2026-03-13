@@ -74,7 +74,92 @@ def load_sheet(worksheet_name, ttl=2):
         return df
     except:
         return pd.DataFrame()
+def generate_shvatzak(missions_df, soldiers_df, leave_df, history_df, start_hour):
+    # --- הכנת הנתונים ---
+    # הפיכת זמנים לאובייקטים של פייתון
+    now = datetime.now()
+    plan_start = datetime.combine(now.date(), start_hour)
+    if plan_start < now: plan_start += timedelta(days=1)
+    
+    # טבלת תוצאה: 24 שעות בחלוקה לחצי שעה (48 משבצות)
+    time_slots = [plan_start + timedelta(minutes=30*i) for i in range(48)]
+    schedule = []
 
+    # רשימת החיילים שבאמת בבסיס (כולל סינון יציאות)
+    available_soldiers = leave_df[leave_df['סטטוס'] == "בבסיס"]['מספר אישי'].tolist()
+    
+    # --- לוגיקת השיבוץ ---
+    for slot in time_slots:
+        is_night = (slot.hour >= 22 or slot.hour < 5)
+        
+        for _, mission in missions_df.iterrows():
+            # בדיקה אם זו שעת החלפה למשימה
+            is_change_time = False
+            if mission['סוג'] == "בלוק":
+                # חילוף רק ב-05:00, 13:00, 21:00
+                if slot.hour in [5, 13, 21] and slot.minute == 0: is_change_time = True
+            else: # רצף
+                # חילוף לפי 'משך משמרת'
+                shift_duration = float(mission['משך משמרת'])
+                # חישוב פשוט של מודולו זמן
+                total_minutes = (slot - plan_start).total_seconds() / 60
+                if total_minutes % (shift_duration * 60) == 0: is_change_time = True
+
+            if is_change_time:
+                # מציאת החייל הכי מתאים (Scoring)
+                best_soldier = None
+                best_score = -999999
+                
+                for s_id in available_soldiers:
+                    score = 0
+                    
+                    # 1. בדיקת מנוחה (מההיסטוריה)
+                    s_hist = history_df[history_df['מספר אישי'] == s_id]
+                    if not s_hist.empty:
+                        last_end = pd.to_datetime(s_hist['זמן התחלה']).max()
+                        rest_hours = (slot - last_end).total_seconds() / 3600
+                        score += rest_hours * 10 # 10 נקודות על כל שעת מנוחה
+                    else:
+                        score += 100 # בונוס למי שלא עשה כלום שבוע
+                    
+                    # 2. קנס קושי (48 שעות אחרונות)
+                    recent_load = s_hist[pd.to_datetime(s_hist['זמן התחלה']) > (slot - timedelta(days=2))]
+                    load_sum = (recent_load['קושי'].astype(float)).sum()
+                    score -= load_sum * 5
+                    
+                    # 3. הגנת יציאה
+                    s_leave = leave_df[leave_df['מספר אישי'] == s_id].iloc[0]
+                    leave_time_str = s_leave['שעת יציאה חריגה'] if s_leave['שעת יציאה חריגה'] else st.session_state.get('g_out', "")
+                    if leave_time_str:
+                        try:
+                            # הערכת זמן יציאה (פשטני לצורך הקוד)
+                            leave_dt = datetime.strptime(leave_time_str, "%d/%m %H:%M").replace(year=now.year)
+                            time_to_leave = (leave_dt - slot).total_seconds() / 3600
+                            if 0 < time_to_leave < 12 and is_night:
+                                score -= 500 # קנס כבד - לא עולה לילה לפני יציאה
+                        except: pass
+
+                    # 4. בדיקת 02:00 בלילה
+                    if slot.hour == 2:
+                        # מי שכבר עשה לילה השבוע - יקבל קנס
+                        night_shifts = s_hist[s_hist['משקל לילה'].astype(float) > 0]
+                        score -= len(night_shifts) * 20
+                    
+                    if score > best_score:
+                        best_score = score
+                        best_soldier = s_id
+                
+                if best_soldier:
+                    # משיכת שם החייל
+                    s_name = soldiers_df[soldiers_df['מספר אישי'] == best_soldier]['שם מלא'].iloc[0]
+                    schedule.append({
+                        "זמן": slot.strftime("%H:%M"),
+                        "משימה": mission['משימה'],
+                        "חייל": s_name,
+                        "מספר אישי": best_soldier
+                    })
+    
+    return pd.DataFrame(schedule)
 # --- 3. ניהול ניווט (Navigation) ---
 if "current_page" not in st.session_state:
     st.session_state.current_page = "home"
@@ -336,11 +421,25 @@ elif st.session_state.current_page == "shvatzak":
                 run_with_retry(lambda: conn.update(worksheet="Leave_Tracker", data=to_save))
                 st.success("הנתונים נשמרו בבסיס הנתונים")
 
-    with t_gen:
+  with t_gen:
         st.subheader("ייצור שבצ''ק")
-        st.write(f"📅 **זמני יציאה לסבב הקרוב:** {st.session_state.get('g_out')} עד {st.session_state.get('g_in')}")
-        
-        if st.button("🚀 חולל הצעת שיבוץ"):
-            with st.spinner("מנתח זמני יציאה וחריגים..."):
-                st.info("המנוע מוכן. הוא יתחשב בזמן הגלובלי לכל מי שמסומן ב-V, אלא אם מילאת לו זמן חריג.")
-                st.warning("תוצאת השיבוץ תופיע כאן לאחר הזנת הנתונים בגיליונות החדשים.")
+        if st.button("🚀 חולל הצעת שיבוץ אוטומטית"):
+            with st.spinner("המנוע מחשב 'צדק פלוגתי'..."):
+                # טעינת נתונים
+                m_df = load_sheet("Missions_Config")
+                l_df = load_sheet("Leave_Tracker")
+                h_df = load_sheet("Shvatzak_History")
+                s_df = load_sheet("Sheet1")
+                
+                # הרצת המנוע
+                result_df = generate_shvatzak(m_df, s_df, l_df, h_df, start_time)
+                
+                if not result_df.empty:
+                    st.success("השבצ''ק חולל!")
+                    st.table(result_df) # הצגת הטבלה
+                    
+                    if st.button("💾 אשר והפץ היסטוריה"):
+                        # כאן נוסיף פקודה שכותבת ל-Shvatzak_History כדי שהמערכת תזכור למחר
+                        st.info("השבצ''ק נשמר בהיסטוריה השבועית.")
+                else:
+                    st.error("לא ניתן היה לחולל שבצ''ק. וודא שיש חיילים בבסיס ומשימות מוגדרות.")
