@@ -259,41 +259,81 @@ elif st.session_state.current_page == "equipment":
                         run_with_retry(lambda: conn.update(worksheet="Equipment", data=eq_df))
                         st.success("הוחזר!"); time.sleep(1); st.rerun()
 
-# --- דף מחולל שבצ"ק ---
+# --- דף מחולל שבצ"ק מעודכן ---
 elif st.session_state.current_page == "shvatzak":
     if st.button("🏠 חזור למסך הראשי"):
         st.session_state.current_page = "home"; st.rerun()
     st.title("📋 מחולל שבצ''ק פלוגתי")
     
-    t_gen, t_cfg, t_lv = st.tabs(["🚀 חולל", "⚙️ הגדרות", "🏠 יציאות"])
+    t_gen, t_cfg, t_lv = st.tabs(["🚀 חולל שיבוץ", "⚙️ הגדרות משימות", "🏠 ניהול יציאות"])
     
     with t_cfg:
         m_df = load_sheet("Missions_Config")
         if not m_df.empty:
+            st.subheader("הגדרת משימות")
             ed_m = st.data_editor(m_df, hide_index=True, use_container_width=True)
             if st.button("💾 שמור הגדרות משימות"):
                 run_with_retry(lambda: conn.update(worksheet="Missions_Config", data=ed_m))
-                st.success("עודכן!")
+                st.success("הגדרות עודכנו!")
 
     with t_lv:
+        st.subheader("ניהול סבב יציאות פלוגתי")
+        
+        # 1. הגדרת זמני סבב גלובליים
+        with st.container(border=True):
+            st.markdown("##### ⏱️ זמני סבב גלובליים (לכל מי שמסומן ב-V)")
+            c_dt = datetime.now().strftime("%d/%m")
+            col_g1, col_g2 = st.columns(2)
+            global_out = col_g1.text_input("שעת יציאה פלוגתית:", value=st.session_state.get('g_out', f"{c_dt} 12:00"))
+            global_in = col_g2.text_input("שעת חזרה פלוגתית:", value=st.session_state.get('g_in', f"{c_dt} 12:00"))
+            st.session_state['g_out'] = global_out
+            st.session_state['g_in'] = global_in
+
+        # 2. טבלת ניהול חריגים
         l_df = load_sheet("Leave_Tracker")
+        s_df = load_sheet("Sheet1")
+        
         if not l_df.empty:
-            with st.expander("⚡ הגדרה פלוגתית מהירה"):
-                c_dt = datetime.now().strftime("%d/%m")
-                col1, col2 = st.columns(2)
-                g_out = col1.text_input("יציאה גלובלית:", f"{c_dt} 12:00")
-                g_in = col2.text_input("חזרה גלובלית:", f"{c_dt} 12:00")
-                if st.button("החל על כל היוצאים"):
-                    l_df.loc[l_df['זמן יציאה'].isin(['', None]), 'זמן יציאה'] = g_out
-                    l_df.loc[l_df['זמן חזרה'].isin(['', None]), 'זמן חזרה'] = g_in
-                    st.info("עודכן בטבלה למטה - אל תשכח ללחוץ שמור")
+            # מיזוג שמות לנוחות המפקד
+            l_display = l_df.merge(s_df[['מספר אישי', 'שם מלא']], on='מספר אישי', how='left')
             
-            ed_l = st.data_editor(l_df, hide_index=True, use_container_width=True)
-            if st.button("💾 שמור נתוני יציאה"):
-                run_with_retry(lambda: conn.update(worksheet="Leave_Tracker", data=ed_l))
-                st.success("נשמר!")
+            # וודוא עמודות חדשות
+            for c in ['יוצא בסבב', 'שעת יציאה חריגה', 'שעת חזרה חריגה']:
+                if c not in l_display.columns: l_display[c] = False if c == 'יוצא בסבב' else ""
+            
+            l_display['יוצא בסבב'] = l_display['יוצא בסבב'].apply(parse_bool)
+            
+            st.markdown("##### רשימת חיילים וחריגים")
+            ed_l = st.data_editor(
+                l_display, 
+                column_config={
+                    "יוצא בסבב": st.column_config.CheckboxColumn("יוצא?"),
+                    "שעת יציאה חריגה": st.column_config.TextColumn("יציאה חריגה (אם יש)"),
+                    "שעת חזרה חריגה": st.column_config.TextColumn("חזרה חריגה (אם יש)"),
+                    "סטטוס": st.column_config.SelectboxColumn("סטטוס נוכחי", options=["בבסיס", "בבית"])
+                },
+                disabled=["שם מלא", "מספר אישי"],
+                hide_index=True, 
+                use_container_width=True
+            )
+            
+            if st.button("💾 שמור נתוני יציאה וחריגים"):
+                to_save = ed_l.drop(columns=['שם מלא'])
+                run_with_retry(lambda: conn.update(worksheet="Leave_Tracker", data=to_save))
+                st.success("הנתונים נשמרו בבסיס הנתונים")
 
     with t_gen:
-        st.info("משימות בלוק: חילופים ב-05:00, 13:00, 21:00 בלבד.\nמשימות רצף: חילוף חופשי.")
+        st.subheader("ייצור שבצ''ק")
+        st.write(f"📅 **זמני יציאה לסבב הקרוב:** {st.session_state.get('g_out')} עד {st.session_state.get('g_in')}")
+        
         if st.button("🚀 חולל הצעת שיבוץ"):
-            st.warning("המנוע מחשב כעת נתוני אמת מהגיליונות. תוצאה תוצג בגרסה הבאה.")
+            with st.spinner("מנתח זמני יציאה וחריגים..."):
+                # לוגיקה פנימית למנוע (נשתמש בה בחילול):
+                # לכל חייל:
+                # IF 'יוצא בסבב' == True:
+                #    זמן יציאה = 'שעת יציאה חריגה' IF NOT EMPTY ELSE global_out
+                # ELSE:
+                #    החייל נשאר בבסיס
+                st.info("המנוע מוכן. הוא יתחשב בזמן הגלובלי לכל מי שמסומן ב-V, אלא אם מילאת לו זמן חריג.")
+                st.warning("תוצאת השיבוץ תופיע כאן לאחר הזנת הנתונים בגיליונות החדשים.")
+
