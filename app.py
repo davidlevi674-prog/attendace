@@ -259,7 +259,7 @@ elif st.session_state.current_page == "equipment":
                         run_with_retry(lambda: conn.update(worksheet="Equipment", data=eq_df))
                         st.success("הוחזר!"); time.sleep(1); st.rerun()
 
-# --- דף מחולל שבצ"ק מעודכן ---
+# --- דף מחולל שבצ"ק מעודכן (מתוקן משגיאות סוג נתונים) ---
 elif st.session_state.current_page == "shvatzak":
     if st.button("🏠 חזור למסך הראשי"):
         st.session_state.current_page = "home"; st.rerun()
@@ -290,26 +290,34 @@ elif st.session_state.current_page == "shvatzak":
             st.session_state['g_in'] = global_in
 
         # 2. טבלת ניהול חריגים
-        l_df = load_sheet("Leave_Tracker")
-        s_df = load_sheet("Sheet1")
+        l_raw = load_sheet("Leave_Tracker")
+        s_raw = load_sheet("Sheet1")
         
-        if not l_df.empty:
-            # מיזוג שמות לנוחות המפקד
-            l_display = l_df.merge(s_df[['מספר אישי', 'שם מלא']], on='מספר אישי', how='left')
+        if not l_raw.empty:
+            # מיזוג שמות
+            l_display = l_raw.merge(s_raw[['מספר אישי', 'שם מלא']], on='מספר אישי', how='left')
             
-            # וודוא עמודות חדשות
-            for c in ['יוצא בסבב', 'שעת יציאה חריגה', 'שעת חזרה חריגה']:
-                if c not in l_display.columns: l_display[c] = False if c == 'יוצא בסבב' else ""
+            # --- תיקון השגיאה: אתחול והמרת סוגי נתונים ---
+            # וודוא עמודות קיימות ומילוי ערכים ריקים בערכי ברירת מחדל נכונים לסוג הטור
+            if 'יוצא בסבב' not in l_display.columns: 
+                l_display['יוצא בסבב'] = False
+            else:
+                l_display['יוצא בסבב'] = l_display['יוצא בסבב'].apply(parse_bool).fillna(False).astype(bool)
             
-            l_display['יוצא בסבב'] = l_display['יוצא בסבב'].apply(parse_bool)
+            if 'שעת יציאה חריגה' not in l_display.columns: l_display['שעת יציאה חריגה'] = ""
+            if 'שעת חזרה חריגה' not in l_display.columns: l_display['שעת חזרה חריגה'] = ""
+            if 'סטטוס' not in l_display.columns: l_display['סטטוס'] = "בבסיס"
+            
+            # ניקוי NaN כללי לטקסט
+            l_display = l_display.fillna("")
             
             st.markdown("##### רשימת חיילים וחריגים")
             ed_l = st.data_editor(
                 l_display, 
                 column_config={
                     "יוצא בסבב": st.column_config.CheckboxColumn("יוצא?"),
-                    "שעת יציאה חריגה": st.column_config.TextColumn("יציאה חריגה (אם יש)"),
-                    "שעת חזרה חריגה": st.column_config.TextColumn("חזרה חריגה (אם יש)"),
+                    "שעת יציאה חריגה": st.column_config.TextColumn("יציאה חריגה"),
+                    "שעת חזרה חריגה": st.column_config.TextColumn("חזרה חריגה"),
                     "סטטוס": st.column_config.SelectboxColumn("סטטוס נוכחי", options=["בבסיס", "בבית"])
                 },
                 disabled=["שם מלא", "מספר אישי"],
@@ -318,7 +326,13 @@ elif st.session_state.current_page == "shvatzak":
             )
             
             if st.button("💾 שמור נתוני יציאה וחריגים"):
-                to_save = ed_l.drop(columns=['שם מלא'])
+                # הסרת עמודת ה'שם מלא' שנוספה רק לצורך תצוגה
+                cols_to_save = [c for c in ed_l.columns if c != 'שם מלא']
+                to_save = ed_l[cols_to_save].copy()
+                
+                # המרה חזרה לטקסט עבור גוגל שיטס
+                to_save['יוצא בסבב'] = to_save['יוצא בסבב'].astype(str).str.upper()
+                
                 run_with_retry(lambda: conn.update(worksheet="Leave_Tracker", data=to_save))
                 st.success("הנתונים נשמרו בבסיס הנתונים")
 
@@ -328,12 +342,5 @@ elif st.session_state.current_page == "shvatzak":
         
         if st.button("🚀 חולל הצעת שיבוץ"):
             with st.spinner("מנתח זמני יציאה וחריגים..."):
-                # לוגיקה פנימית למנוע (נשתמש בה בחילול):
-                # לכל חייל:
-                # IF 'יוצא בסבב' == True:
-                #    זמן יציאה = 'שעת יציאה חריגה' IF NOT EMPTY ELSE global_out
-                # ELSE:
-                #    החייל נשאר בבסיס
                 st.info("המנוע מוכן. הוא יתחשב בזמן הגלובלי לכל מי שמסומן ב-V, אלא אם מילאת לו זמן חריג.")
                 st.warning("תוצאת השיבוץ תופיע כאן לאחר הזנת הנתונים בגיליונות החדשים.")
-
