@@ -79,9 +79,23 @@ def generate_shvatzak(missions_df, soldiers_df, leave_df, history_df, start_hour
     
     time_slots = [plan_start + timedelta(minutes=30*i) for i in range(48)]
     schedule = []
-    busy_until = {}
     
-    available_ids = leave_df[leave_df['סטטוס'] == "בבסיס"]['מספר אישי'].astype(str).tolist()
+    # --- פנקס היסטוריה וירטואלי (מעקב בזמן אמת) ---
+    # מפתח: מספר אישי, ערך: זמן סיום משמרת אחרון (כולל אלו ששובצו הרגע)
+    virtual_history = {}
+    
+    # אתחול הפנקס לפי ההיסטוריה הקיימת בגיליון
+    if not history_df.empty:
+        for _, row in history_df.iterrows():
+            s_id = str(row['מספר אישי']).split('.')[0].strip()
+            try:
+                # הנחה שזמן התחלה + משך משמרת (אם קיים) או פשוט זמן התחלה
+                end_t = pd.to_datetime(row['זמן התחלה'])
+                if s_id not in virtual_history or end_t > virtual_history[s_id]:
+                    virtual_history[s_id] = end_t
+            except: pass
+
+    available_ids = leave_df[leave_df['סטטוס'] == "בבסיס"]['מספר אישי'].astype(str).str.split('.').str[0].tolist()
     
     if not available_ids:
         return pd.DataFrame()
@@ -89,82 +103,89 @@ def generate_shvatzak(missions_df, soldiers_df, leave_df, history_df, start_hour
     for slot in time_slots:
         is_night = (slot.hour >= 22 or slot.hour < 5)
         
-        for _, mission in missions_df.iterrows():
+        # מיון משימות לפי קושי (קודם נשבץ את הקשות כדי שלא ניתקע בלי אנשים)
+        sorted_missions = missions_df.sort_values(by='קושי', ascending=False)
+        
+        for _, mission in sorted_missions.iterrows():
             m_name = mission['משימה']
             m_type = mission['סוג']
-            m_dur = float(mission['משך משמרת'])
-            # שליפת כמות האנשים הנדרשת למשימה הזו
-            try:
-                num_required = int(float(mission['סדכ בעמדה']))
-            except:
-                num_required = 1
+            try: m_dur = float(mission['משך משמרת'])
+            except: m_dur = 2.0
+            
+            try: num_req = int(float(mission['סדכ בעמדה']))
+            except: num_req = 1
             
             is_change_time = False
             if m_type == "בלוק":
                 if slot.hour in [5, 13, 21] and slot.minute == 0: is_change_time = True
             else: 
-                total_min_from_start = (slot - plan_start).total_seconds() / 60
-                if total_min_from_start % (m_dur * 60) == 0: is_change_time = True
+                total_min = (slot - plan_start).total_seconds() / 60
+                if total_min % (m_dur * 60) == 0: is_change_time = True
 
             if is_change_time:
-                # לולאה למילוי כל הסד"כ הנדרש למשימה הספציפית הזו
-                chosen_for_this_mission_now = []
-                
-                for i in range(num_required):
+                chosen_ids = []
+                for i in range(num_req):
                     best_soldier = None
                     best_score = -999999
                     
                     for s_id in available_ids:
-                        # חייל כבר במשימה אחרת או כבר נבחר למשימה הזו בסבב הנוכחי?
-                        if (s_id in busy_until and busy_until[s_id] > slot) or (s_id in chosen_for_this_mission_now):
+                        s_id_clean = str(s_id).split('.')[0].strip()
+                        
+                        # --- חוקי ברזל (Constraints) ---
+                        # 1. לא משובץ פעמיים לאותה משימה באותו זמן
+                        if s_id_clean in chosen_ids: continue
+                        
+                        # 2. האם הוא כרגע במשמרת אחרת?
+                        last_end = virtual_history.get(s_id_clean, plan_start - timedelta(days=7))
+                        if slot < last_end: continue
+                        
+                        # 3. חוק מנוחה מינימלי: חייב לנוח לפחות אורך משמרת אחת לפני שעולה שוב
+                        # (מונע את הלופ של ערן/רועי)
+                        if slot < last_end + timedelta(hours=1): # מינימום שעה לכל משימה
                             continue
-                        
+
+                        # --- חישוב ניקוד (Scoring) ---
                         score = 0
-                        s_hist = history_df[history_df['מספר אישי'].astype(str) == s_id]
+                        rest_h = (slot - last_end).total_seconds() / 3600
+                        score += rest_h * 20 # בונוס מנוחה גבוה
                         
-                        # ניקוד מנוחה
-                        if not s_hist.empty:
-                            last_end = pd.to_datetime(s_hist['זמן התחלה']).max()
-                            rest_h = (slot - last_end).total_seconds() / 3600
-                            score += rest_h * 15
-                        else:
-                            score += 200 
-                        
-                        # קנס עומס
-                        if not s_hist.empty:
-                            recent = s_hist[pd.to_datetime(s_hist['זמן התחלה']) > (slot - timedelta(days=2))]
-                            score -= (recent['קושי'].astype(float).sum()) * 10
-                        
+                        # קנס עומס היסטורי (מגיליון ההיסטוריה המקורי)
+                        s_hist_real = history_df[history_df['מספר אישי'].astype(str).str.contains(s_id_clean)]
+                        if not s_hist_real.empty:
+                            recent = s_hist_real[pd.to_datetime(s_hist_real['זמן התחלה']) > (slot - timedelta(days=2))]
+                            score -= (recent['קושי'].astype(float).sum()) * 15
+
                         # הגנת יציאה
-                        s_leave_data = leave_df[leave_df['מספר אישי'].astype(str) == s_id]
+                        s_leave_data = leave_df[leave_df['מספר אישי'].astype(str).str.contains(s_id_clean)]
                         if not s_leave_data.empty:
                             s_leave = s_leave_data.iloc[0]
                             l_out = s_leave.get('שעת יציאה חריגה', "")
-                            leave_time_str = l_out if l_out else st.session_state.get('g_out', "")
-                            if leave_time_str:
+                            l_str = l_out if l_out else st.session_state.get('g_out', "")
+                            if l_str:
                                 try:
-                                    l_dt = datetime.strptime(leave_time_str, "%d/%m %H:%M").replace(year=now.year)
+                                    l_dt = datetime.strptime(l_str, "%d/%m %H:%M").replace(year=now.year)
                                     if 0 < (l_dt - slot).total_seconds() / 3600 < 12 and is_night:
-                                        score -= 1000
+                                        score -= 2000
                                 except: pass
 
                         if score > best_score:
                             best_score = score
-                            best_soldier = s_id
+                            best_soldier = s_id_clean
                     
                     if best_soldier:
-                        busy_until[best_soldier] = slot + timedelta(hours=m_dur)
-                        chosen_for_this_mission_now.append(best_soldier)
+                        # עדכון הפנקס הוירטואלי מיד!
+                        virtual_history[best_soldier] = slot + timedelta(hours=m_dur)
+                        chosen_ids.append(best_soldier)
                         
-                        s_name_match = soldiers_df[soldiers_df['מספר אישי'].astype(str) == str(best_soldier)]['שם מלא']
+                        s_name_match = soldiers_df[soldiers_df['מספר אישי'].astype(str).str.contains(best_soldier)]['שם מלא']
                         s_name = s_name_match.iloc[0] if not s_name_match.empty else f"חייל {best_soldier}"
                         
                         schedule.append({
                             "שעה": slot.strftime("%H:%M"),
                             "משימה": m_name,
-                            "חייל משובץ": s_name,
-                            "מספר אישי": best_soldier,
-                            "סיום משמרת": (slot + timedelta(hours=m_dur)).strftime("%H:%M")
+                            "חייל": s_name,
+                            "מ.א": best_soldier,
+                            "עד שעה": (slot + timedelta(hours=m_dur)).strftime("%H:%M")
                         })
     
     return pd.DataFrame(schedule)
@@ -253,3 +274,4 @@ elif st.session_state.current_page == "equipment":
     if st.button("🏠 חזור"): st.session_state.current_page = "home"; st.rerun()
     st.write("ניהול ציוד פעיל...")
     # ... הקוד המקורי שלך ...
+
